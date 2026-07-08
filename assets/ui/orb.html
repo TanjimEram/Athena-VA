@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<!-- Athena's orb. Self-contained: no network, no external files.
+     athena/ui.py loads this in a pywebview window and drives it by calling
+     window.setState('idle' | 'listening' | 'thinking' | 'speaking'). -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Athena</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #05080d;
+    overflow: hidden;
+    user-select: none;
+    cursor: default;
+  }
+
+  #stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Every state just changes the accent color and which layers animate. */
+  body.state-idle      { --c: 140, 190, 235; }
+  body.state-listening { --c:  60, 160, 255; }
+  body.state-thinking  { --c: 255, 175,  70; }
+  body.state-speaking  { --c:  70, 220, 130; }
+
+  /* ---- core sphere ---- */
+  #orb {
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 35% 30%,
+        rgba(255, 255, 255, 0.9) 0%,
+        rgba(var(--c), 0.95) 22%,
+        rgba(var(--c), 0.45) 55%,
+        rgba(var(--c), 0.10) 78%,
+        transparent 100%);
+    box-shadow:
+      0 0 30px  rgba(var(--c), 0.55),
+      0 0 90px  rgba(var(--c), 0.30),
+      0 0 160px rgba(var(--c), 0.15);
+    transition: box-shadow 0.6s ease;
+  }
+
+  /* soft outer halo behind the core */
+  #halo {
+    position: absolute;
+    width: 220px;
+    height: 220px;
+    border-radius: 50%;
+    background: radial-gradient(circle,
+      rgba(var(--c), 0.16) 0%, rgba(var(--c), 0.05) 55%, transparent 72%);
+    transition: opacity 0.6s ease;
+  }
+
+  /* ---- idle: slow calm pulse ---- */
+  body.state-idle #orb  { animation: pulse 4.5s ease-in-out infinite; }
+  body.state-idle #halo { animation: pulse 4.5s ease-in-out infinite; }
+
+  /* ---- listening: blue with expanding ripple rings ---- */
+  .ripple {
+    position: absolute;
+    width: 130px;
+    height: 130px;
+    border-radius: 50%;
+    border: 2px solid rgba(var(--c), 0.55);
+    opacity: 0;
+  }
+  body.state-listening #orb { animation: pulse 1.8s ease-in-out infinite; }
+  body.state-listening .ripple { animation: ripple 2.4s ease-out infinite; }
+  body.state-listening .ripple.r2 { animation-delay: 0.8s; }
+  body.state-listening .ripple.r3 { animation-delay: 1.6s; }
+
+  /* ---- thinking: amber swirling ring ---- */
+  #swirl {
+    position: absolute;
+    width: 180px;
+    height: 180px;
+    border-radius: 50%;
+    opacity: 0;
+    background: conic-gradient(
+      transparent 0deg,
+      rgba(var(--c), 0.85) 80deg,
+      transparent 160deg,
+      rgba(var(--c), 0.35) 240deg,
+      transparent 320deg);
+    /* punch a hole in the middle so only a ring shows */
+    -webkit-mask: radial-gradient(circle, transparent 58%, black 60%, black 68%, transparent 70%);
+            mask: radial-gradient(circle, transparent 58%, black 60%, black 68%, transparent 70%);
+    transition: opacity 0.4s ease;
+  }
+  #swirl2 {
+    position: absolute;
+    width: 150px;
+    height: 150px;
+    border-radius: 50%;
+    opacity: 0;
+    background: conic-gradient(
+      transparent 0deg,
+      rgba(var(--c), 0.6) 120deg,
+      transparent 220deg);
+    -webkit-mask: radial-gradient(circle, transparent 55%, black 57%, black 64%, transparent 66%);
+            mask: radial-gradient(circle, transparent 55%, black 57%, black 64%, transparent 66%);
+    transition: opacity 0.4s ease;
+  }
+  body.state-thinking #swirl  { opacity: 1; animation: spin 2.6s linear infinite; }
+  body.state-thinking #swirl2 { opacity: 1; animation: spinBack 1.9s linear infinite; }
+  body.state-thinking #orb    { animation: pulse 3s ease-in-out infinite; }
+
+  /* ---- speaking: green reactive pulse (quick, uneven, like a voice) ---- */
+  body.state-speaking #orb  { animation: talk 1.1s ease-in-out infinite; }
+  body.state-speaking #halo { animation: talk 1.1s ease-in-out infinite; }
+
+  @keyframes pulse {
+    0%, 100% { transform: scale(1);    opacity: 0.85; }
+    50%      { transform: scale(1.07); opacity: 1; }
+  }
+  @keyframes ripple {
+    0%   { transform: scale(1);    opacity: 0.7; }
+    100% { transform: scale(2.35); opacity: 0; }
+  }
+  @keyframes spin     { to { transform: rotate(360deg); } }
+  @keyframes spinBack { to { transform: rotate(-360deg); } }
+  @keyframes talk {
+    0%   { transform: scale(1); }
+    18%  { transform: scale(1.14); }
+    35%  { transform: scale(1.03); }
+    55%  { transform: scale(1.18); }
+    72%  { transform: scale(1.06); }
+    88%  { transform: scale(1.12); }
+    100% { transform: scale(1); }
+  }
+
+  /* small dim label so testers can see the current state at a glance */
+  #label {
+    position: absolute;
+    bottom: 18px;
+    width: 100%;
+    text-align: center;
+    font-family: "Segoe UI", sans-serif;
+    font-size: 11px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    color: rgba(var(--c), 0.55);
+    transition: color 0.6s ease;
+  }
+</style>
+</head>
+<body class="state-idle">
+  <div id="stage">
+    <div id="halo"></div>
+    <div id="swirl"></div>
+    <div id="swirl2"></div>
+    <div class="ripple r1"></div>
+    <div class="ripple r2"></div>
+    <div class="ripple r3"></div>
+    <div id="orb"></div>
+    <div id="label">idle</div>
+  </div>
+
+<script>
+  var VALID = ["idle", "listening", "thinking", "speaking"];
+
+  // Called from Python via window.evaluate_js.
+  window.setState = function (state) {
+    if (VALID.indexOf(state) === -1) { state = "idle"; }
+    document.body.className = "state-" + state;
+    document.getElementById("label").textContent = state;
+    return state;
+  };
+
+  // Esc closes the window (it's frameless, so there's no close button).
+  window.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && window.pywebview) {
+      window.pywebview.api && window.pywebview.api.close
+        ? window.pywebview.api.close()
+        : null;
+    }
+  });
+</script>
+</body>
+</html>

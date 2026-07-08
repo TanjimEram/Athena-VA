@@ -101,21 +101,34 @@ clear() -> None
 speak(text: str) -> None   # blocking: returns when Athena finishes talking
 ```
 
-### athena/ui.py — the orb
-Visual state indicator. Must be non-blocking (runs in its own thread).
+### athena/ui.py — the orb (DONE)
+Visual state indicator, a frameless always-on-top pywebview window showing
+`assets/ui/orb.html`. pywebview must own the main thread, so `start()`
+BLOCKS: main.py passes its assistant loop as `main_fn` and that loop runs in
+a background thread while the orb is on screen.
 
 ```python
-start() -> None
-set_state(state: str) -> None   # 'idle' | 'listening' | 'thinking' | 'speaking'
-stop() -> None
+STATES: tuple                        # ('idle', 'listening', 'thinking', 'speaking')
+start(main_fn=None) -> None          # blocking; runs main_fn in a worker thread
+set_state(state: str) -> None        # thread-safe; unknown states fall back to idle
+stop() -> None                       # closes the window, which unblocks start()
 ```
 
 ### main.py — the conductor
-Call order for one interaction:
+Because ui.start() blocks, main.py looks like:
 
 ```python
+def assistant_loop():
+    wake.init(); memory setup
+    loop: ...the interaction below...
+
 config.check_config()
-ui.start(); wake.init(); memory setup
+ui.start(main_fn=assistant_loop)   # blocks here until the orb is closed
+```
+
+Call order for one interaction (inside assistant_loop):
+
+```python
 loop:
     ui.set_state("idle")
     wait until wake.process_chunk(...) is True        # via audio_io input stream

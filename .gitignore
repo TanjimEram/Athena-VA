@@ -1,0 +1,8 @@
+# Secrets — the Groq key lives in .env and must never be committed
+.env
+
+# Virtual environment
+.venv/
+
+# Python bytecode
+__pycache__/

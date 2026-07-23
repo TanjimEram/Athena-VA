@@ -13,6 +13,15 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 # Model names live here so swapping models is a one-line change.
 BRAIN_MODEL = "llama-3.3-70b-versatile"
 
+# Voice for text-to-speech: Irish female, our FRIDAY sound.
+TTS_VOICE = "en-IE-EmilyNeural"
+
+# Speech-to-text model on Groq.
+STT_MODEL = "whisper-large-v3-turbo"
+
+# Microphone recording defaults: 16 kHz mono is what speech models want.
+AUDIO_SAMPLERATE = 16000
+
 # How the assistant behaves. Kept here so tuning doesn't mean editing brain.py.
 ASSISTANT_NAME = "Athena"
 BRAIN_TEMPERATURE = 0.6

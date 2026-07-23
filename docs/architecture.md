@@ -24,13 +24,17 @@ ASSISTANT_NAME: str
 check_config() -> None    # raises RuntimeError if the API key is missing
 ```
 
-### athena/audio_io.py — microphone and speaker plumbing
-Owns the audio devices so wake/stt/tts never touch hardware directly.
+### athena/audio_io.py — microphone plumbing (record() DONE)
+Owns the audio devices so wake/stt never touch hardware directly.
 
 ```python
-start_input_stream(callback) -> None   # begins feeding mic chunks (bytes) to callback
+record(seconds: float = 5, samplerate: int = 16000) -> str | None
+# blocking; records mono from the default mic, returns path to a temp 16 kHz
+# WAV (caller deletes it), or None with a printed hint if the mic won't open
+
+# still to build, for the always-on wake-word listener:
+start_input_stream(callback) -> None   # feeds mic chunks (bytes) to callback
 stop_input_stream() -> None
-play_audio(pcm_bytes: bytes, sample_rate: int) -> None   # blocking playback
 ```
 
 ### athena/wake.py — wake-word detection
@@ -41,10 +45,13 @@ init() -> None
 process_chunk(pcm_bytes: bytes) -> bool   # True the moment the wake word is heard
 ```
 
-### athena/stt.py — speech to text
-Records after the wake word until silence, returns what was said.
+### athena/stt.py — speech to text (transcribe() DONE)
+Sends recorded audio to Groq's Whisper (`config.STT_MODEL`).
 
 ```python
+transcribe(wav_path: str) -> str   # plain text; "" on failure
+
+# still to build: record-until-silence on top of audio_io + transcribe
 listen_and_transcribe(timeout_seconds: float = 10.0) -> str   # "" if nothing heard
 ```
 
@@ -95,7 +102,10 @@ get_history() -> list[dict]             # [{"role": ..., "content": ...}, ...]
 clear() -> None
 ```
 
-### athena/tts.py — text to speech
+### athena/tts.py — text to speech (DONE)
+Uses edge-tts (online) with the voice in `config.TTS_VOICE`
+(en-IE-EmilyNeural) and plays through pygame. Needs internet; prints a
+message instead of crashing without it.
 
 ```python
 speak(text: str) -> None   # blocking: returns when Athena finishes talking

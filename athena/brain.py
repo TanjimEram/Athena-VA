@@ -185,12 +185,16 @@ def think(user_text: str, history: list | None = None) -> dict:
             needs_confirmation=True,
         )
 
-    # verdict == "free": run the skill now and speak its result.
+    # verdict == "free": run the skill now and speak its REAL result.
+    # reply_text is exactly what the skill returned - never a made-up success.
     try:
         reply = skills.SKILLS[tool_name](**args)
     except Exception as exc:
-        print(f"[brain] skill {tool_name} failed: {exc}")
-        reply = f"I tried to {tool_name.replace('_', ' ')} but something went wrong."
+        print(f"[brain] skill {tool_name} failed: {exc!r}")
+        reply = (
+            f"I tried to {tool_name.replace('_', ' ')} but it failed: "
+            f"{type(exc).__name__}: {exc}."
+        )
     return _result(reply, tool_called=tool_name, args=args)
 
 
@@ -202,8 +206,11 @@ def run_confirmed(tool_name: str, args: dict) -> str:
     try:
         return skills.SKILLS[tool_name](**args)
     except Exception as exc:
-        print(f"[brain] skill {tool_name} failed: {exc}")
-        return f"I tried to {tool_name.replace('_', ' ')} but something went wrong."
+        print(f"[brain] skill {tool_name} failed: {exc!r}")
+        return (
+            f"I tried to {tool_name.replace('_', ' ')} but it failed: "
+            f"{type(exc).__name__}: {exc}."
+        )
 
 
 def _result(reply_text: str, tool_called: str | None = None,

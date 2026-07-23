@@ -22,6 +22,13 @@ STT_MODEL = "whisper-large-v3-turbo"
 # Microphone recording defaults: 16 kHz mono is what speech models want.
 AUDIO_SAMPLERATE = 16000
 
+# Wake word (openWakeWord, no API key). WAKE_MODEL is either a pretrained
+# name like "hey_jarvis" or a path to a custom .onnx file — swapping in our
+# own "Athena" model later is just changing this one line.
+WAKE_MODEL = "hey_jarvis"
+# 0..1 confidence needed to trigger. Lower = more sensitive, more false wakes.
+WAKE_THRESHOLD = 0.5
+
 # How the assistant behaves. Kept here so tuning doesn't mean editing brain.py.
 ASSISTANT_NAME = "Athena"
 BRAIN_TEMPERATURE = 0.6

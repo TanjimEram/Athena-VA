@@ -1,0 +1,14 @@
+# Athena dependencies. Install with:  pip install -r requirements.txt
+groq
+python-dotenv
+pywebview
+edge-tts
+pygame
+sounddevice
+scipy
+numpy
+psutil
+pycaw
+comtypes
+openwakeword
+onnxruntime

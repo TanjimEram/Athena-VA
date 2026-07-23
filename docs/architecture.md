@@ -32,17 +32,20 @@ record(seconds: float = 5, samplerate: int = 16000) -> str | None
 # blocking; records mono from the default mic, returns path to a temp 16 kHz
 # WAV (caller deletes it), or None with a printed hint if the mic won't open
 
-# still to build, for the always-on wake-word listener:
-start_input_stream(callback) -> None   # feeds mic chunks (bytes) to callback
-stop_input_stream() -> None
+# (wake.py opens its own mic stream, so the old start_input_stream/
+#  stop_input_stream plan is no longer needed)
 ```
 
-### athena/wake.py — wake-word detection
-Listens to mic chunks and fires when it hears "Athena".
+### athena/wake.py — wake-word detection (DONE)
+openWakeWord (local, no API key, no account) with the pretrained
+"hey_jarvis" model. Model name/path and threshold live in config
+(`WAKE_MODEL`, `WAKE_THRESHOLD`); swapping in a custom "Athena" .onnx later
+is a one-line config change. Owns the mic only while listening and releases
+it before returning, so audio_io.record can open it immediately after.
 
 ```python
-init() -> None
-process_chunk(pcm_bytes: bytes) -> bool   # True the moment the wake word is heard
+listen_for_wake(timeout: float | None = None) -> bool
+# blocks until the wake word is heard (True); False on timeout or mic failure
 ```
 
 ### athena/stt.py — speech to text (transcribe() DONE)
@@ -77,8 +80,11 @@ confirm_needed(tool_name: str) -> bool
 Current policy — free: open_app, open_website, web_search, get_system_info;
 confirm: set_volume, lock_screen; blocked: none (unknown tools are blocked).
 
-### athena/skills.py — actions (STUBS DONE)
-Each returns a short sentence for the voice to speak.
+### athena/skills.py — actions (REAL, DONE)
+Real Windows implementations (app launch via PATH + ShellExecute, browser via
+webbrowser, volume via pycaw, lock via user32, battery/CPU via psutil). Each
+returns a short honest sentence about what actually happened — errors are
+reported, never faked as success. The brain speaks these strings verbatim.
 
 ```python
 open_app(name: str) -> str
@@ -124,42 +130,26 @@ set_state(state: str) -> None        # thread-safe; unknown states fall back to 
 stop() -> None                       # closes the window, which unblocks start()
 ```
 
-### main.py — the conductor
-Because ui.start() blocks, main.py looks like:
-
-```python
-def assistant_loop():
-    wake.init(); memory setup
-    loop: ...the interaction below...
-
-config.check_config()
-ui.start(main_fn=assistant_loop)   # blocks here until the orb is closed
-```
-
-Call order for one interaction (inside assistant_loop):
+### athena/main.py — the conductor (DONE, headless: no orb/memory yet)
+Run with `python -m athena.main`. Current loop per interaction:
 
 ```python
 loop:
-    ui.set_state("idle")
-    wait until wake.process_chunk(...) is True        # via audio_io input stream
-    ui.set_state("listening")
-    text = stt.listen_and_transcribe()
-    ui.set_state("thinking")
-    memory.add("user", text)
-    result = brain.think(text, memory.get_history())
+    wake.listen_for_wake()                 # blocks; releases mic on return
+    tts.speak("Yes?")
+    text = hear()                          # audio_io.record + stt.transcribe
+    result = brain.think(text, history)
+    tts.speak(result["reply_text"])
     if result["needs_confirmation"]:
-        ui.set_state("speaking"); tts.speak(result["reply_text"])
-        answer = stt.listen_and_transcribe()          # listen for "yes"
-        if answer says yes:
-            reply = brain.run_confirmed(result["tool_called"], result["args"])
-        else:
-            reply = "Okay, cancelled."
-    else:
-        reply = result["reply_text"]
-    memory.add("assistant", reply)
-    ui.set_state("speaking")
-    tts.speak(reply)
+        answer = hear()                    # listen for "yes"
+        reply = brain.run_confirmed(...) if yes else "Okay, cancelled."
+        tts.speak(reply)
+    history.append(user + assistant turns)
 ```
+
+Still to wire in: ui (main loop must run as `ui.start(main_fn=...)`'s worker
+thread with `ui.set_state` calls at each stage) and memory (replace the local
+`history` list).
 
 ## Ground rules
 

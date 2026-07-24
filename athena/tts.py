@@ -21,10 +21,20 @@ _mixer_ready = False
 
 
 def _init_mixer() -> None:
+    """Initialize pygame's mixer once and keep it alive between speak()
+    calls - re-initializing per sentence adds audible startup lag."""
     global _mixer_ready
     if not _mixer_ready:
         pygame.mixer.init()
         _mixer_ready = True
+
+
+# Warm the mixer at import (app startup). If no audio device is ready yet,
+# stay quiet - speak() retries lazily.
+try:
+    _init_mixer()
+except pygame.error:
+    pass
 
 
 async def _synthesize(text: str, path: str) -> None:

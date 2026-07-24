@@ -9,26 +9,18 @@ import groq
 
 from athena import config, safety, skills
 
-_client = None
-
-
-def _get_client() -> groq.Groq:
-    """Create the Groq client once, on first use."""
-    global _client
-    if _client is None:
-        config.check_config()
-        _client = groq.Groq(api_key=config.GROQ_API_KEY)
-    return _client
-
-
 SYSTEM_PROMPT = (
-    f"You are {config.ASSISTANT_NAME}, a voice assistant running on the user's "
-    "Windows PC. Your tone is calm, warm, and lightly witty — think FRIDAY from "
-    "Iron Man: capable and friendly, never robotic or overeager. Your replies "
-    "are spoken aloud, so keep them short — one or two sentences, no lists, no "
-    "markdown, no emoji. When the user asks you to DO something on the PC, call "
-    "the matching tool. When they're just talking or asking a question, simply "
-    "answer in words. Never invent tools you don't have."
+    f"You are {config.ASSISTANT_NAME}, a voice assistant on the user's Windows "
+    "PC. You are calm, warm, and intelligent, with a composed presence like "
+    "FRIDAY from Iron Man. Everything you say is read aloud by a voice, so it "
+    "must sound natural when spoken: one or two short sentences, never "
+    "paragraphs. No markdown, no bullet points, no lists, no emoji. Be "
+    "concise and never repeat the user's request back to them. When you "
+    "perform an action, confirm it briefly and naturally, like 'Chrome's "
+    "open.' rather than 'I have successfully opened Google Chrome for you.' "
+    "If you can't do something, say so plainly in one sentence. When the "
+    "user asks you to do something on the PC, call the matching tool; when "
+    "they're just talking, simply answer. Never invent tools you don't have."
 )
 
 # One schema entry per skill. The model reads these descriptions to decide
@@ -121,6 +113,20 @@ TOOLS = [
 ]
 
 
+def _chat(messages: list, use_tools: bool):
+    """One completion call to Groq, with or without the tools array."""
+    kwargs = dict(
+        model=config.BRAIN_MODEL,
+        messages=messages,
+        temperature=config.BRAIN_TEMPERATURE,
+        max_tokens=config.BRAIN_MAX_TOKENS,
+    )
+    if use_tools:
+        kwargs["tools"] = TOOLS
+        kwargs["tool_choice"] = "auto"
+    return config.get_groq_client().chat.completions.create(**kwargs)
+
+
 def think(user_text: str, history: list | None = None) -> dict:
     """Turn the user's words into a spoken reply and (maybe) an action.
 
@@ -133,14 +139,32 @@ def think(user_text: str, history: list | None = None) -> dict:
     messages.append({"role": "user", "content": user_text})
 
     try:
-        response = _get_client().chat.completions.create(
-            model=config.BRAIN_MODEL,
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            temperature=config.BRAIN_TEMPERATURE,
-            max_tokens=config.BRAIN_MAX_TOKENS,
-        )
+        response = _chat(messages, use_tools=True)
+    except groq.BadRequestError as exc:
+        # llama-3.3 sometimes garbles its tool-call syntax and Groq rejects
+        # the whole request ("tool_use_failed"). A fresh attempt usually
+        # comes out clean; if not, answer in words rather than error out.
+        if "tool_use_failed" not in str(exc):
+            print(f"[brain] bad request: {exc}")
+            return _result("Something went wrong on my end. Try that once more.")
+        try:
+            response = _chat(messages, use_tools=True)
+        except Exception:
+            # Two garbled attempts: give up on tools for this turn. The
+            # words-only reply must not pretend an action happened.
+            retry_messages = messages + [{
+                "role": "system",
+                "content": (
+                    "Your tools are unavailable for this reply. Answer in "
+                    "words only. Do not claim to have opened, searched, or "
+                    "done anything - just talk."
+                ),
+            }]
+            try:
+                response = _chat(retry_messages, use_tools=False)
+            except Exception as retry_exc:
+                print(f"[brain] retry without tools failed: {retry_exc!r}")
+                return _result("Something went wrong on my end. Try that once more.")
     except groq.RateLimitError:
         return _result("I'm being rate-limited right now. Give me a few seconds and ask again.")
     except groq.APIConnectionError:

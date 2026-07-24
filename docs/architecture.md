@@ -28,9 +28,15 @@ check_config() -> None    # raises RuntimeError if the API key is missing
 Owns the audio devices so wake/stt never touch hardware directly.
 
 ```python
+record_until_silence(max_seconds=12, silence_threshold=None,
+                     silence_duration=0.8, samplerate=16000) -> str | None
+# the default listener: starts capturing when speech begins, stops after
+# silence_duration of quiet (auto-calibrated to the room's ambient noise),
+# hard stop at max_seconds; None if no speech was heard
+
 record(seconds: float = 5, samplerate: int = 16000) -> str | None
-# blocking; records mono from the default mic, returns path to a temp 16 kHz
-# WAV (caller deletes it), or None with a printed hint if the mic won't open
+# fixed-length fallback; records mono from the default mic
+# both return the path to a temp 16 kHz WAV (caller deletes it)
 
 # (wake.py opens its own mic stream, so the old start_input_stream/
 #  stop_input_stream plan is no longer needed)
@@ -131,21 +137,15 @@ stop() -> None                       # closes the window, which unblocks start()
 ```
 
 ### athena/main.py — the conductor (DONE, headless: no orb/memory yet)
-Run with `python -m athena.main`. Current loop per interaction:
-
-```python
-loop:
-    wake.listen_for_wake()                 # blocks; releases mic on return
-    tts.speak("Yes?")
-    text = hear()                          # audio_io.record + stt.transcribe
-    result = brain.think(text, history)
-    tts.speak(result["reply_text"])
-    if result["needs_confirmation"]:
-        answer = hear()                    # listen for "yes"
-        reply = brain.run_confirmed(...) if yes else "Okay, cancelled."
-        tts.speak(reply)
-    history.append(user + assistant turns)
-```
+Run with `python -m athena.main`. A state machine that prints every
+transition: WAITING (wake word) → beep → LISTENING (VAD recording) →
+THINKING (whisper + brain) → SPEAKING (tts) → ~6 s follow-up window
+(keep talking, no wake word needed) → back to WAITING when you go quiet.
+Confirm-level actions listen for a spoken yes/no. Sleep phrases ("go to
+sleep", "goodbye athena", "that's all", "stand down") → farewell → IDLE →
+exit; Ctrl+C also lands in IDLE cleanly. The mic is owned by one state at
+a time — wake.py and audio_io.py open their streams in with-blocks, so the
+device is released on every exit path.
 
 Still to wire in: ui (main loop must run as `ui.start(main_fn=...)`'s worker
 thread with `ui.set_state` calls at each stage) and memory (replace the local

@@ -32,10 +32,13 @@ WAKE_THRESHOLD = 0.5
 # How the assistant behaves. Kept here so tuning doesn't mean editing brain.py.
 ASSISTANT_NAME = "Athena"
 BRAIN_TEMPERATURE = 0.6
-BRAIN_MAX_TOKENS = 512
+# Low on purpose: replies are spoken aloud, so a hard cap keeps her to a
+# sentence or two. (Tool-call arguments also fit - they're short.)
+BRAIN_MAX_TOKENS = 100
 
-# How many past messages think() keeps when given a long history.
-HISTORY_MAX_MESSAGES = 20
+# How many past messages think() keeps: 12 = the last 6 user/assistant
+# exchanges. Enough for "what about tomorrow?", small enough to stay fast.
+HISTORY_MAX_MESSAGES = 12
 
 
 def check_config() -> None:
@@ -45,3 +48,17 @@ def check_config() -> None:
             "GROQ_API_KEY is not set. Create a .env file in the project root "
             "with a line like: GROQ_API_KEY=your_key_here"
         )
+
+
+_groq_client = None
+
+
+def get_groq_client():
+    """The one shared Groq client (brain + speech-to-text). Created on first
+    use and reused forever - building it per call wastes time on every turn."""
+    global _groq_client
+    if _groq_client is None:
+        import groq
+        check_config()
+        _groq_client = groq.Groq(api_key=GROQ_API_KEY)
+    return _groq_client

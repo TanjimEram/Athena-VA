@@ -1,5 +1,6 @@
 """Spoken conversation test - the whole pipeline except the wake word.
-Each turn: press Enter, talk for 5 seconds, hear Athena answer.
+Each turn: press Enter, talk (recording stops when you pause), hear Athena
+answer.
 If she asks to confirm an action (like locking the screen), just say yes
 or no when she prompts you. Type q + Enter to quit."""
 
@@ -8,9 +9,10 @@ import os
 from athena import audio_io, brain, stt, tts
 
 
-def listen(seconds: float = 5) -> str:
-    """Record once, transcribe it, clean up the temp file, return the text."""
-    wav_path = audio_io.record(seconds=seconds)
+def listen() -> str:
+    """Listen until the speaker goes quiet, transcribe, clean up the temp
+    file, return the text ("" if nothing was said)."""
+    wav_path = audio_io.record_until_silence()
     if wav_path is None:
         return ""
     try:
@@ -33,7 +35,7 @@ def main() -> None:
         if command.strip().lower() == "q":
             break
 
-        print("Listening... (5 seconds)")
+        print("Listening... (stops when you stop talking)")
         user_text = listen()
         if not user_text:
             print("Athena: Sorry, I didn't catch that.")
@@ -48,7 +50,7 @@ def main() -> None:
 
         # Confirm-level actions: she asked a question, listen for the answer.
         if result["needs_confirmation"]:
-            print("Listening for yes or no... (5 seconds)")
+            print("Listening for yes or no...")
             answer = listen()
             print(f"You said: {answer}")
             if is_yes(answer):

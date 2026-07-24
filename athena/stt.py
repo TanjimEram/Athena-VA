@@ -6,22 +6,12 @@ import groq
 
 from athena import config
 
-_client = None
-
-
-def _get_client() -> groq.Groq:
-    global _client
-    if _client is None:
-        config.check_config()
-        _client = groq.Groq(api_key=config.GROQ_API_KEY)
-    return _client
-
 
 def transcribe(wav_path: str) -> str:
     """Turn a spoken WAV recording into text. Returns "" on failure."""
     try:
         with open(wav_path, "rb") as f:
-            result = _get_client().audio.transcriptions.create(
+            result = config.get_groq_client().audio.transcriptions.create(
                 file=(wav_path, f.read()),
                 model=config.STT_MODEL,
                 language="en",

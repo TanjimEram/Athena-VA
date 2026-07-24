@@ -35,6 +35,11 @@ def _get_model():
     return _model
 
 
+def preload() -> None:
+    """Load the wake model up front so the first detection isn't slow."""
+    _get_model()
+
+
 def listen_for_wake(timeout: float | None = None) -> bool:
     """Block until the wake word is heard, then return True with the mic
     released. Returns False if the mic can't open, or if `timeout` seconds

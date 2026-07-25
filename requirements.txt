@@ -12,3 +12,4 @@ pycaw
 comtypes
 openwakeword
 onnxruntime
+supabase

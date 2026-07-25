@@ -6,3 +6,6 @@
 
 # Python bytecode
 __pycache__/
+
+# Per-machine UI state (orb position)
+.athena_ui_state.json

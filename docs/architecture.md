@@ -72,6 +72,12 @@ think(user_text: str, history: list | None = None) -> dict
 # returns {"reply_text": str, "tool_called": str | None,
 #          "args": dict, "needs_confirmation": bool}
 
+think_stream(user_text, history=None) -> (generator, result)
+# low-latency path: generator yields text pieces as the model writes;
+# feed it to tts.speak_stream. `result` is think()'s dict (plus
+# 'first_token_s'), filled once the generator is exhausted. Tool calls
+# still work; falls back to think() internally on stream failures.
+
 run_confirmed(tool_name: str, args: dict) -> str
 # executes a confirm-level tool AFTER the user says yes; returns spoken result
 ```
@@ -105,25 +111,87 @@ SKILLS: dict[str, callable]   # name -> function, used by brain to dispatch
 Adding a skill = write the function, add it to `SKILLS`, add its schema to
 `brain.TOOLS`, and put its name in one of the sets in `safety.py`.
 
-### athena/memory.py — conversation history
-Keeps the rolling chat history that gets passed into `brain.think`.
+### athena/memory.py — long-term memory (DONE)
+Supabase (free cloud Postgres) `interactions` table; the schema SQL is in
+memory.py's docstring. brain.think logs every exchange (async, so it never
+delays speech) and injects the last few past interactions into the model's
+context once per session. Without SUPABASE_URL/SUPABASE_KEY in .env, or
+offline, everything returns empty/False with a single warning — Athena
+keeps working, just memoryless. (Short-term history within a session is
+still the plain list main.py passes to think.)
 
 ```python
-add(role: str, content: str) -> None    # role is 'user' or 'assistant'
-get_history() -> list[dict]             # [{"role": ..., "content": ...}, ...]
-clear() -> None
+log_interaction(user_text, reply, tool_called=None, tool_args=None) -> bool
+log_interaction_async(...) -> None      # fire-and-forget thread
+recent(n=5) -> list[dict]               # last n rows, newest first
+search(query, n=3) -> list[dict]        # case-insensitive match on user_text
 ```
 
-### athena/tts.py — text to speech (DONE)
-Uses edge-tts (online) with the voice in `config.TTS_VOICE`
-(en-IE-EmilyNeural) and plays through pygame. Needs internet; prints a
-message instead of crashing without it.
+Verify the connection with `python memory_test.py` (writes one row, reads it
+back). One shared client is created lazily and reused (never per call).
+
+### athena/tts.py — text to speech (DONE, streaming pipeline)
+edge-tts (online, voice in `config.TTS_VOICE`) + pygame at 24 kHz with a
+small buffer. speak_stream is a 3-stage chain (sentence splitter -> synth
+worker -> gapless player) so the first sentence plays while the next is
+synthesizing and the model is still writing. All audio is in-memory
+BytesIO; a persistent asyncio loop serves every synthesis; timeouts and
+empty answers retry once. Needs internet; prints instead of crashing.
 
 ```python
-speak(text: str) -> None   # blocking: returns when Athena finishes talking
+speak(text: str, on_level=None) -> None      # blocking, one clip
+speak_stream(chunks, on_level=None, on_sentence=None) -> float | None
+# speaks a text-piece iterator sentence by sentence; on_sentence fires as
+# each sentence STARTS playing; returns time-to-first-audio in ms
+warmup() -> None   # call at startup: mixer + loop + throwaway synthesis
 ```
 
-### athena/ui.py — the orb (DONE)
+### athena/ui.py — the two-mode UI (DONE: orb + dashboard in one window)
+One pywebview window that switches modes: ORB (90x90 colour-keyed chathead,
+edge-docked, click to expand) and DASHBOARD (assets/ui/dashboard.html,
+1150x700 centred HUD: tool log, streaming transcript + typed input, status
+strip, confirm card, collapsible session rail; minimise button or Escape
+collapses back). Mode switches animate the window bounds over ~200 ms.
+Python caches state/transcript/log/status/pending-confirm and replays them
+into whichever page loads, so nothing is lost by switching. The orb drags
+manually (JS pointer deltas -> api.move_window; <5 px & <300 ms = click);
+on release it snaps to the nearest edge of the monitor it's on (Win32 work
+areas: multi-monitor and taskbar aware), any corner sticks, and the spot is
+saved to .athena_ui_state.json (gitignored) and restored next session.
+Drag the dashboard by its top bar.
+
+```python
+STATES: tuple                       # idle, listening, thinking, speaking, confirm
+start(main_fn=None) -> None         # blocking; main_fn runs in a worker thread
+stop() / expand() / collapse()
+set_state(s) / set_amplitude(v)     # work in both modes
+show_bubble(text)                   # orb mode only
+add_log(text, tier) / add_transcript(who, text) / set_status(dict)
+show_confirm(question) / open_sessions() / close_sessions()
+on_typed_input / on_confirm / on_orb_click   # assignable hooks
+```
+
+### athena/ui_orb.py — the standalone orb (superseded by ui.py)
+A 90px always-on-top orb hugging the right screen edge: five states
+(idle/listening/thinking/speaking/confirm), amplitude-reactive bars, a
+sliding message bubble, drag-anywhere with animated edge snapping, and a
+click callback stub (`on_orb_click`). `TRANSPARENT` flag at the top: True
+is the pretty transparent-window mode; if that renders invisible on a
+machine (WebView2 bug), set False for a dark rounded panel that widens
+briefly for bubbles. Same threading contract as ui.py: `start(main_fn)`
+blocks.
+
+```python
+STATES: tuple            # idle, listening, thinking, speaking, confirm
+start(main_fn=None) -> None
+set_state(state: str) -> None
+set_amplitude(v: float) -> None    # 0..1, drives bars + speaking pulse
+show_bubble(text: str) -> None     # auto-fades after ~6 s
+stop() -> None
+on_orb_click() -> None             # stub; replace to handle clicks
+```
+
+### athena/ui.py — the old orb (superseded by ui_orb.py)
 Visual state indicator, a frameless always-on-top pywebview window showing
 `assets/ui/orb.html`. pywebview must own the main thread, so `start()`
 BLOCKS: main.py passes its assistant loop as `main_fn` and that loop runs in
@@ -136,20 +204,23 @@ set_state(state: str) -> None        # thread-safe; unknown states fall back to 
 stop() -> None                       # closes the window, which unblocks start()
 ```
 
-### athena/main.py — the conductor (DONE, headless: no orb/memory yet)
-Run with `python -m athena.main`. A state machine that prints every
-transition: WAITING (wake word) → beep → LISTENING (VAD recording) →
-THINKING (whisper + brain) → SPEAKING (tts) → ~6 s follow-up window
-(keep talking, no wake word needed) → back to WAITING when you go quiet.
-Confirm-level actions listen for a spoken yes/no. Sleep phrases ("go to
-sleep", "goodbye athena", "that's all", "stand down") → farewell → IDLE →
-exit; Ctrl+C also lands in IDLE cleanly. The mic is owned by one state at
-a time — wake.py and audio_io.py open their streams in with-blocks, so the
-device is released on every exit path.
+### athena/main.py — the conductor (DONE, fully wired to the UI)
+Run with `python -m athena.main`. pywebview owns the main thread
+(`ui.start()`); the assistant loop and a status updater run as daemon
+threads, so closing the window always brings the process down. Per turn:
+wake word (3 s polling bursts so shutdown is prompt) → beep → VAD listening
+with real mic levels fed to `ui.set_amplitude` → whisper → streaming reply
+(brain.think_stream piped into tts.speak_stream: first sentence plays while
+the model is still writing; measured time-to-first-audio is printed and
+logged per turn) with the transcript filling as each sentence is spoken →
+orb bubble when collapsed → ~6 s follow-up window. Confirm-tier actions show the dashboard card AND listen for a
+spoken yes/no — click wins. Typed input from the dashboard goes straight
+into `process_turn` (no mic). The status strip gets connections
+(groq/supabase/mic), cpu/battery (psutil), and stt/brain/tts latency every
+3 s. Sleep phrases or closing the window shut everything down cleanly.
 
-Still to wire in: ui (main loop must run as `ui.start(main_fn=...)`'s worker
-thread with `ui.set_state` calls at each stage) and memory (replace the local
-`history` list).
+Still to wire in: session history is a local list (memory.py already logs
+to Supabase through brain.think).
 
 ## Ground rules
 

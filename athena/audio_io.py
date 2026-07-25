@@ -30,11 +30,15 @@ def record_until_silence(
     silence_threshold: float | None = None,
     silence_duration: float = 0.8,
     samplerate: int = config.AUDIO_SAMPLERATE,
+    on_level=None,
 ) -> str | None:
     """Record speech and stop automatically after `silence_duration` seconds
     of quiet (hard stop at `max_seconds`). The threshold auto-calibrates
     from ambient noise unless `silence_threshold` is given. Returns the WAV
-    path, or None if no speech was heard (or the mic failed)."""
+    path, or None if no speech was heard (or the mic failed).
+
+    on_level, if given, is called every 30 ms frame with the raw RMS level -
+    the UI uses it to animate the orb/waveform while you talk."""
     frame_len = int(samplerate * FRAME_MS / 1000)
     max_frames = int(max_seconds * 1000 / FRAME_MS)
     silence_frames_needed = max(1, int(silence_duration * 1000 / FRAME_MS))
@@ -58,6 +62,11 @@ def record_until_silence(
                 frame, _overflowed = stream.read(frame_len)
                 frame = np.squeeze(frame)
                 rms = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))
+                if on_level is not None:
+                    try:
+                        on_level(rms)
+                    except Exception:
+                        on_level = None  # never let a UI hiccup kill recording
 
                 # Phase 1: listen to the empty room to learn its noise level.
                 if i < calibration_frames:

@@ -10,6 +10,11 @@ load_dotenv()
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
+# Supabase (cloud memory). Optional: without these Athena still works,
+# she just doesn't remember across sessions.
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+
 # Model names live here so swapping models is a one-line change.
 BRAIN_MODEL = "llama-3.3-70b-versatile"
 

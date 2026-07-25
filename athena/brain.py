@@ -4,10 +4,11 @@ whether to run it now, ask the user to confirm, or refuse. Everything the
 rest of the pipeline needs comes back in one dict."""
 
 import json
+import time
 
 import groq
 
-from athena import config, safety, skills
+from athena import config, memory, safety, skills
 
 SYSTEM_PROMPT = (
     f"You are {config.ASSISTANT_NAME}, a voice assistant on the user's Windows "
@@ -127,16 +128,61 @@ def _chat(messages: list, use_tools: bool):
     return config.get_groq_client().chat.completions.create(**kwargs)
 
 
+_memory_context = None
+
+
+def _get_memory_context() -> str:
+    """Fetch the last few logged interactions ONCE per session and format
+    them for the model, so 'what did I ask you earlier' works across
+    restarts. Within a session, `history` already covers it."""
+    global _memory_context
+    if _memory_context is None:
+        # recent() is newest-first; reverse to chronological so the summary
+        # reads oldest -> newest in the prompt.
+        rows = list(reversed(memory.recent(5)))
+        if rows:
+            lines = [
+                f"- They said: {row['user_text']} / You replied: {row['athena_reply']}"
+                for row in rows
+            ]
+            _memory_context = (
+                "From your long-term memory, the user's most recent past "
+                "interactions with you (possibly from earlier sessions):\n"
+                + "\n".join(lines)
+            )
+        else:
+            _memory_context = ""
+    return _memory_context
+
+
 def think(user_text: str, history: list | None = None) -> dict:
-    """Turn the user's words into a spoken reply and (maybe) an action.
+    """Turn the user's words into a spoken reply and (maybe) an action,
+    then log the exchange to long-term memory.
 
     history is an optional list of prior {'role': ..., 'content': ...} dicts.
     Returns {'reply_text', 'tool_called', 'args', 'needs_confirmation'}.
     """
+    result = _think(user_text, history)
+    # Fire-and-forget so saving never delays the spoken reply.
+    memory.log_interaction_async(
+        user_text, result["reply_text"], result["tool_called"], result["args"] or None
+    )
+    return result
+
+
+def _build_messages(user_text: str, history: list | None) -> list:
     messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    memory_context = _get_memory_context()
+    if memory_context:
+        messages.append({"role": "system", "content": memory_context})
     if history:
         messages.extend(history[-config.HISTORY_MAX_MESSAGES:])
     messages.append({"role": "user", "content": user_text})
+    return messages
+
+
+def _think(user_text: str, history: list | None = None) -> dict:
+    messages = _build_messages(user_text, history)
 
     try:
         response = _chat(messages, use_tools=True)
@@ -222,19 +268,127 @@ def think(user_text: str, history: list | None = None) -> dict:
     return _result(reply, tool_called=tool_name, args=args)
 
 
+def think_stream(user_text: str, history: list | None = None):
+    """Streaming version of think() for low time-to-first-word.
+
+    Returns (generator, result): the generator yields text pieces as the
+    model writes them - feed it straight into tts.speak_stream. `result`
+    is the same dict think() returns; it is fully filled in once the
+    generator is exhausted (plus 'first_token_s', the model's latency to
+    its first piece of text). Tool calls still work: a free tool runs and
+    its honest result is yielded as the spoken confirmation; confirm and
+    blocked tiers yield the question/refusal. On any streaming failure it
+    falls back to the non-streaming think() path and yields that reply."""
+    result = {"reply_text": "", "tool_called": None, "args": {},
+              "needs_confirmation": False, "first_token_s": None}
+
+    def generate():
+        started = time.monotonic()
+        tool_acc: dict[int, dict] = {}
+        try:
+            stream = config.get_groq_client().chat.completions.create(
+                model=config.BRAIN_MODEL,
+                messages=_build_messages(user_text, history),
+                tools=TOOLS,
+                tool_choice="auto",
+                temperature=config.BRAIN_TEMPERATURE,
+                max_tokens=config.BRAIN_MAX_TOKENS,
+                stream=True,
+            )
+            for chunk in stream:
+                if not chunk.choices:
+                    continue
+                delta = chunk.choices[0].delta
+                if delta is None:
+                    continue
+                if delta.content:
+                    if result["first_token_s"] is None:
+                        result["first_token_s"] = time.monotonic() - started
+                    result["reply_text"] += delta.content
+                    yield delta.content
+                for tc in delta.tool_calls or []:
+                    slot = tool_acc.setdefault(tc.index, {"name": "", "args": ""})
+                    if tc.function and tc.function.name:
+                        slot["name"] += tc.function.name
+                    if tc.function and tc.function.arguments:
+                        slot["args"] += tc.function.arguments
+        except Exception as exc:
+            # Streaming failed (rate limit, garbled tool syntax, network):
+            # fall back to the sturdy non-streaming ladder in one piece.
+            print(f"[brain] stream failed, falling back: {type(exc).__name__}")
+            fallback = _think(user_text, history)
+            result.update(fallback)
+            if result["first_token_s"] is None:
+                result["first_token_s"] = time.monotonic() - started
+            memory.log_interaction_async(
+                user_text, result["reply_text"], result["tool_called"],
+                result["args"] or None)
+            yield fallback["reply_text"]
+            return
+
+        if tool_acc:
+            slot = tool_acc[min(tool_acc)]
+            tool_name = slot["name"]
+            try:
+                args = json.loads(slot["args"] or "{}")
+            except json.JSONDecodeError:
+                args = {}
+            result["tool_called"] = tool_name
+            result["args"] = args
+            if result["first_token_s"] is None:
+                result["first_token_s"] = time.monotonic() - started
+
+            verdict = safety.classify(tool_name)
+            if verdict == "blocked":
+                text = f"Sorry, I'm not allowed to do that. {tool_name} is off-limits for me."
+            elif verdict == "confirm":
+                pretty = ", ".join(f"{k} {v}" for k, v in args.items()) or "that"
+                text = (
+                    f"Just to confirm, you want me to {tool_name.replace('_', ' ')}"
+                    + (f" with {pretty}?" if args else "?")
+                    + " Say yes and I'll do it."
+                )
+                result["needs_confirmation"] = True
+            else:
+                try:
+                    text = skills.SKILLS[tool_name](**args)
+                except Exception as exc:
+                    print(f"[brain] skill {tool_name} failed: {exc!r}")
+                    text = (
+                        f"I tried to {tool_name.replace('_', ' ')} but it failed: "
+                        f"{type(exc).__name__}: {exc}."
+                    )
+            if result["reply_text"]:
+                result["reply_text"] += " "
+            result["reply_text"] += text
+            yield text
+        elif not result["reply_text"]:
+            text = "I'm not sure what to say to that."
+            result["reply_text"] = text
+            yield text
+
+        memory.log_interaction_async(
+            user_text, result["reply_text"], result["tool_called"],
+            result["args"] or None)
+
+    return generate(), result
+
+
 def run_confirmed(tool_name: str, args: dict) -> str:
     """Execute a tool the user has already said yes to. Called by the layer
     that handles the user's confirmation (main.py or the test CLI)."""
     if safety.classify(tool_name) == "blocked" or tool_name not in skills.SKILLS:
         return "Sorry, that action isn't allowed."
     try:
-        return skills.SKILLS[tool_name](**args)
+        reply = skills.SKILLS[tool_name](**args)
     except Exception as exc:
         print(f"[brain] skill {tool_name} failed: {exc!r}")
-        return (
+        reply = (
             f"I tried to {tool_name.replace('_', ' ')} but it failed: "
             f"{type(exc).__name__}: {exc}."
         )
+    memory.log_interaction_async(f"(confirmed: {tool_name})", reply, tool_name, args)
+    return reply
 
 
 def _result(reply_text: str, tool_called: str | None = None,

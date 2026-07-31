@@ -73,10 +73,24 @@ think(user_text: str, history: list | None = None) -> dict
 #          "args": dict, "needs_confirmation": bool}
 
 think_stream(user_text, history=None) -> (generator, result)
-# low-latency path: generator yields text pieces as the model writes;
-# feed it to tts.speak_stream. `result` is think()'s dict (plus
-# 'first_token_s'), filled once the generator is exhausted. Tool calls
-# still work; falls back to think() internally on stream failures.
+# low-latency single-action path: generator yields text pieces as the model
+# writes; feed to tts.speak_stream. (Used before the multi-step upgrade.)
+
+run_agent(user_text, history=None, on_step=None, confirm=None) -> dict
+# MULTI-STEP: independent actions are batched into ONE model call (few
+# tokens/requests - matters on the free tier); dependent actions chain one
+# at a time with results fed back. Capped at 5 steps, stops after a batch or
+# a repeat-only round. Safety per step: free runs, blocked refused,
+# confirm-tier calls `confirm(question)->bool` and can be skipped without
+# killing the chain. Already-run/declined actions are deduped. on_step(step)
+# fires live for UI logging. Returns {"reply_text", "steps"}; reply_text is
+# ONE summary grounded in the real per-step ledger (never spins a
+# skipped/failed step as success). This is what main.py uses.
+# Hardened for live use: tool-call model calls retry with rising temperature
+# on the intermittent 'tool_use_failed'; if it still won't parse, the
+# intended call is RECOVERED from the error's failed_generation and run
+# anyway. Rate limits back off; connection errors fail fast with a spoken
+# message. main.py wraps each turn so no error can crash the loop.
 
 run_confirmed(tool_name: str, args: dict) -> str
 # executes a confirm-level tool AFTER the user says yes; returns spoken result
@@ -105,7 +119,23 @@ web_search(query: str) -> str
 set_volume(level: int) -> str
 lock_screen() -> str
 get_system_info() -> str
+see_screen(question: str, focus="screen"|"window") -> str   # via vision.py
 SKILLS: dict[str, callable]   # name -> function, used by brain to dispatch
+```
+
+### athena/vision.py — screen understanding (DONE)
+Captures the screen (or active window) with mss, downscales to
+`config.VISION_MAX_EDGE` and base64-JPEGs it, and asks Groq's
+`config.VISION_MODEL` (a reasoning model - called with
+`reasoning_effort="none"` and `<think>` stripped so nothing leaks to TTS).
+Groq rotates vision models: Llama 4 Scout was deprecated June 2026, so this
+uses `qwen/qwen3.6-27b`. Powers the `see_screen` skill.
+
+```python
+capture_screen() -> PIL.Image
+capture_active_window() -> PIL.Image        # falls back to full screen
+ask_about_screen(question, active_window_only=False) -> str
+save_screenshot(path=None, active_window_only=False) -> str | None
 ```
 
 Adding a skill = write the function, add it to `SKILLS`, add its schema to
@@ -146,19 +176,25 @@ speak_stream(chunks, on_level=None, on_sentence=None) -> float | None
 warmup() -> None   # call at startup: mixer + loop + throwaway synthesis
 ```
 
-### athena/ui.py — the two-mode UI (DONE: orb + dashboard in one window)
-One pywebview window that switches modes: ORB (90x90 colour-keyed chathead,
-edge-docked, click to expand) and DASHBOARD (assets/ui/dashboard.html,
-1150x700 centred HUD: tool log, streaming transcript + typed input, status
-strip, confirm card, collapsible session rail; minimise button or Escape
-collapses back). Mode switches animate the window bounds over ~200 ms.
-Python caches state/transcript/log/status/pending-confirm and replays them
-into whichever page loads, so nothing is lost by switching. The orb drags
-manually (JS pointer deltas -> api.move_window; <5 px & <300 ms = click);
-on release it snaps to the nearest edge of the monitor it's on (Win32 work
-areas: multi-monitor and taskbar aware), any corner sticks, and the spot is
-saved to .athena_ui_state.json (gitignored) and restored next session.
-Drag the dashboard by its top bar.
+### athena/ui.py — the two-mode UI (DONE: single-page app.html)
+ONE pywebview window loading ONE page, `assets/ui/app.html`, which holds
+both `#orb-view` (96x96 colour-keyed chathead) and `#dashboard-view` (1150x700
+HUD). Switching modes NEVER reloads: Python resizes/moves the window and
+calls the page's `showDashboard()`/`showOrb()` to toggle a body class, so the
+DOM (log, transcript, state) persists across switches - no cache/replay
+needed. Switches animate window bounds over ~200 ms.
+
+Reliability rebuild: all JS handlers that call Python are wired only after
+the `pywebviewready` event, and every call goes through a guarded, logged
+`callApi()`. The orb drags via `api.move_window(dx,dy)` (physical-pixel
+deltas moved via Win32, DPI-correct); on mouseup, movement <6 px = CLICK ->
+`api.expand()`, otherwise DRAG -> snap to the nearest edge of the current
+monitor (Win32 work areas; multi-monitor + taskbar aware), spot saved to
+.athena_ui_state.json and restored next session. Escape / minimise button /
+rail "orb mode" -> `api.collapse()`. Voice: skills `open_dashboard` /
+`close_dashboard` call `ui.expand()` / `ui.collapse()` (main.py injects the
+ui ref via `skills.set_ui`). Diagnostics: `[app]` console logs on
+mousedown/up/click/drag; `[ui]` terminal prints on expand/collapse.
 
 ```python
 STATES: tuple                       # idle, listening, thinking, speaking, confirm

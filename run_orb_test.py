@@ -1,38 +1,38 @@
-"""Visual test for the floating orb. Run this over a bright window: you
-should see ONLY the circular orb (and its bubble) - your desktop visible
-everywhere else, no white or dark box. It cycles all five states every
-2.5 s, feeds fake audio levels during listening/speaking, and shows a
-short and a long bubble so you can watch the window grow and shrink.
-Drag the orb anywhere - it snaps to the nearest screen edge, any corner
-you like. Click it to see the callback print. Closes itself at the end."""
+"""Standalone orb test - opaque window, no transparency, no colour-keying.
 
-import math
+Opens the orb and, once the page is ready, auto-cycles the state so you can
+confirm the JS<->Python bridge works:
+
+  * The orb should visibly change (idle / listening / thinking / speaking).
+  * RIGHT-CLICK the orb -> Inspect to open the webview console. Clicking the
+    orb should log 'mousedown', 'mouseup', then 'CLICK', and the TERMINAL
+    should print 'expand() ran'.
+  * Drag the orb to move it; it snaps to the nearest screen edge on release.
+  * In the dashboard, press Esc (or the - button) to collapse back.
+
+Close the window to exit.
+"""
+
 import time
 
-from athena import ui_orb
+from athena import ui
 
 
-def demo() -> None:
-    ui_orb.show_bubble("Hello!")
-    for state in ui_orb.STATES:
-        print(f"state: {state}")
-        ui_orb.set_state(state)
-        if state == "thinking":
-            ui_orb.show_bubble("This longer bubble should stretch the window "
-                               "further left, then tuck away again.")
-        if state in ("listening", "speaking"):
-            # fake audio level so the bars/pulse move
-            for i in range(25):
-                ui_orb.set_amplitude(abs(math.sin(i / 3.5)))
-                time.sleep(0.1)
-            ui_orb.set_amplitude(0)
-        else:
-            time.sleep(2.5)
-    print("Done - closing the orb.")
-    ui_orb.stop()
+def cycle_states() -> None:
+    time.sleep(2)  # let the page load and wire handlers (pywebviewready)
+    print("Bridge check: auto-cycling states. Click the orb to expand, "
+          "drag to move, Esc to collapse.")
+    states = ["idle", "listening", "thinking", "speaking"]
+    i = 0
+    while ui._window is not None:
+        state = states[i % len(states)]
+        ui.set_state(state)
+        print(f"[test] setState -> {state}")
+        i += 1
+        time.sleep(2)
 
 
 if __name__ == "__main__":
-    print("Opening the orb at the right screen edge...")
-    ui_orb.start(main_fn=demo)
-    print("Orb closed.")
+    print("Opening the orb (devtools enabled: right-click -> Inspect for the console)...")
+    ui.start(main_fn=cycle_states, debug=True)
+    print("Orb window closed. Goodbye.")

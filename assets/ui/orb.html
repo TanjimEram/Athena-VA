@@ -255,11 +255,18 @@
     }
   }
 
+  function dbg(msg) {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.debug) {
+      window.pywebview.api.debug(msg);
+    }
+  }
+
   document.getElementById("orb-wrap").addEventListener("mousedown", function (e) {
     held = true; dragged = false;
     startX = lastX = e.screenX; startY = lastY = e.screenY;
     downT = Date.now();
     e.preventDefault();
+    dbg("mousedown at screen (" + e.screenX + "," + e.screenY + ")");
   });
 
   document.addEventListener("mousemove", function (e) {
@@ -275,12 +282,19 @@
     if (!held) { return; }
     held = false;
     flushMove();
-    if (!window.pywebview || !window.pywebview.api) { return; }
     var dist = Math.hypot(e.screenX - startX, e.screenY - startY);
-    if (dist < 5 && Date.now() - downT < 300) {
-      window.pywebview.api.orb_clicked();      // a click, not a drag
-    } else if (dragged) {
+    var dt = Date.now() - downT;
+    // Click vs drag is decided ONLY by movement: if the pointer never moved
+    // past the 5px threshold, it's a click - no matter how long it was held.
+    // (The old code also required <300ms, so a slow still click fired
+    //  nothing at all - that was the click-to-expand bug.)
+    var kind = dragged ? "drag" : "click";
+    dbg("mouseup dist=" + dist.toFixed(0) + "px dt=" + dt + "ms -> " + kind);
+    if (!window.pywebview || !window.pywebview.api) { return; }
+    if (dragged) {
       window.pywebview.api.drag_ended();       // snap to the nearest edge
+    } else {
+      window.pywebview.api.orb_clicked();      // a click -> expand
     }
   });
 </script>

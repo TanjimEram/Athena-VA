@@ -24,6 +24,16 @@ TTS_VOICE = "en-IE-EmilyNeural"
 # Speech-to-text model on Groq.
 STT_MODEL = "whisper-large-v3-turbo"
 
+# Vision model on Groq (screen understanding). Groq rotates these - only
+# reference it from here. As of 2026-07, Llama 4 Scout is DEPRECATED (gone
+# June 2026); qwen/qwen3.6-27b is the live multimodal model. If vision calls
+# start failing, run:  python -c "from athena import config;
+# print([m.id for m in config.get_groq_client().models.list().data])"
+# and swap in whatever vision model is current.
+VISION_MODEL = "qwen/qwen3.6-27b"
+# Longest image edge sent to the model - smaller = faster + cheaper.
+VISION_MAX_EDGE = 1536
+
 # Microphone recording defaults: 16 kHz mono is what speech models want.
 AUDIO_SAMPLERATE = 16000
 
@@ -36,6 +46,14 @@ WAKE_THRESHOLD = 0.5
 
 # How the assistant behaves. Kept here so tuning doesn't mean editing brain.py.
 ASSISTANT_NAME = "Athena"
+
+# What Athena can do, in plain words. Used to answer "what can you do?"
+# accurately - update this one line when you add a skill.
+CAPABILITIES = (
+    "open apps, open websites, search the web, set the system volume, "
+    "lock the screen, report battery and system status, and look at your "
+    "screen to answer questions about what's on it"
+)
 BRAIN_TEMPERATURE = 0.6
 # Low on purpose: replies are spoken aloud, so a hard cap keeps her to a
 # sentence or two. (Tool-call arguments also fit - they're short.)

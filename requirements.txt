@@ -13,3 +13,6 @@ comtypes
 openwakeword
 onnxruntime
 supabase
+mss
+Pillow
+pygetwindow

@@ -31,6 +31,7 @@ def record_until_silence(
     silence_duration: float = 0.8,
     samplerate: int = config.AUDIO_SAMPLERATE,
     on_level=None,
+    stop_event=None,
 ) -> str | None:
     """Record speech and stop automatically after `silence_duration` seconds
     of quiet (hard stop at `max_seconds`). The threshold auto-calibrates
@@ -38,7 +39,10 @@ def record_until_silence(
     path, or None if no speech was heard (or the mic failed).
 
     on_level, if given, is called every 30 ms frame with the raw RMS level -
-    the UI uses it to animate the orb/waveform while you talk."""
+    the UI uses it to animate the orb/waveform while you talk.
+    stop_event, if given, is checked every frame - when set, recording stops
+    immediately and releases the mic (used to abort a listen when the user
+    answers a confirmation by clicking instead of speaking)."""
     frame_len = int(samplerate * FRAME_MS / 1000)
     max_frames = int(max_seconds * 1000 / FRAME_MS)
     silence_frames_needed = max(1, int(silence_duration * 1000 / FRAME_MS))
@@ -59,6 +63,8 @@ def record_until_silence(
             samplerate=samplerate, channels=1, dtype="int16", blocksize=frame_len
         ) as stream:
             for i in range(max_frames):
+                if stop_event is not None and stop_event.is_set():
+                    return None  # aborted (e.g. confirmation answered by click)
                 frame, _overflowed = stream.read(frame_len)
                 frame = np.squeeze(frame)
                 rms = float(np.sqrt(np.mean(frame.astype(np.float64) ** 2)))

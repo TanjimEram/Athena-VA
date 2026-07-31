@@ -12,6 +12,18 @@ import webbrowser
 
 import psutil
 
+# The UI module, injected by main.py via set_ui() so the dashboard skills can
+# drive it without skills.py importing ui at module load (avoids a cycle and
+# lets skills be used headlessly in tests).
+_ui = None
+
+
+def set_ui(ui_module) -> None:
+    """main.py calls this once at startup to wire the dashboard skills."""
+    global _ui
+    _ui = ui_module
+
+
 # Friendly names -> what Windows knows the app as. ShellExecute (os.startfile)
 # resolves registered apps like chrome/msedge even when they're not on PATH.
 APP_ALIASES = {
@@ -106,6 +118,36 @@ def lock_screen() -> str:
     return "Windows refused to lock the screen, sorry."
 
 
+def see_screen(question: str, focus: str = "screen") -> str:
+    """Look at the user's screen (or just the active window) and answer a
+    question about what's shown. focus is 'screen' or 'window'."""
+    from athena import vision  # imported lazily so mss/Pillow load only if used
+    active_window_only = str(focus).lower().startswith("window")
+    where = "active window" if active_window_only else "screen"
+    print(f"[skills] looking at the {where}: {question!r}")
+    return vision.ask_about_screen(question, active_window_only=active_window_only)
+
+
+def open_dashboard() -> str:
+    """Expand the orb into the full Athena dashboard."""
+    if _ui is None:
+        return "The dashboard isn't available right now."
+    if _ui.mode() == "dashboard":
+        return "The dashboard's already open."
+    _ui.expand()
+    return "Opening the dashboard."
+
+
+def close_dashboard() -> str:
+    """Collapse the dashboard back to the floating orb."""
+    if _ui is None:
+        return "The dashboard isn't available right now."
+    if _ui.mode() == "orb":
+        return "The dashboard's already closed."
+    _ui.collapse()
+    return "Closing the dashboard."
+
+
 def get_system_info() -> str:
     """Report real battery and volume status."""
     parts = []
@@ -140,4 +182,7 @@ SKILLS = {
     "set_volume": set_volume,
     "lock_screen": lock_screen,
     "get_system_info": get_system_info,
+    "see_screen": see_screen,
+    "open_dashboard": open_dashboard,
+    "close_dashboard": close_dashboard,
 }

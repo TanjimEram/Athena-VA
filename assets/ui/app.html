@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<!-- Athena - single opaque page with two views. NO window transparency and
+     NO colour-keying anywhere: the orb is a dark circle on an opaque dark
+     rounded panel, so mouse events always land reliably.
+
+     #orb-view       full-window clickable dark panel + the orb circle
+     #dashboard-view the full HUD (hidden until expanded)
+
+     ROOT-CAUSE GUARD: nothing calls into Python until the 'pywebviewready'
+     event fires (handlers are wired inside that listener), and every api
+     call goes through callApi() which try/catches and console.logs. Open the
+     webview console to watch [app] traces. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Athena</title>
+<style>
+  :root {
+    --bg: #05080c; --panel: #080d13; --accent: #4fd6e8;
+    --line: rgba(79, 214, 232, 0.16); --line2: rgba(79, 214, 232, 0.3);
+    --text: #c7d3dc; --dim: #5c6b78; --amber: #e8b94f; --red: #e85c5c;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    user-select: none; -webkit-user-select: none; cursor: default;
+    background: #0a1420;   /* opaque - matches the orb panel and window bg */
+    font-family: "Cascadia Mono", "Consolas", monospace;
+  }
+  body.mode-dashboard { background: var(--bg); }
+  body.mode-orb #dashboard-view { display: none; }
+  body.mode-dashboard #orb-view { display: none; }
+
+  /* Orb accent colour per state (r,g,b). */
+  body.state-idle      { --c: 120, 134, 156; }
+  body.state-listening { --c:  34, 211, 238; }
+  body.state-thinking  { --c: 251, 191,  36; }
+  body.state-speaking  { --c:  52, 211, 153; }
+  body.state-confirm   { --c: 251, 146,  60; }
+
+  /* ===================== ORB VIEW (opaque) ===================== */
+  #orb-view {
+    position: fixed; inset: 0; z-index: 1000;   /* full window, on top */
+    pointer-events: auto;                        /* always receives the mouse */
+    display: flex; align-items: center; justify-content: center;
+    background: #0a1420;
+    border-radius: 22px;
+    border: 1px solid rgba(79, 214, 232, 0.18);
+    cursor: pointer;
+  }
+  #orb {
+    position: relative; width: 74px; height: 74px; border-radius: 50%;
+    background: radial-gradient(circle at 38% 30%, #16324c 0%, #0b1a2a 68%);
+    border: 2px solid rgba(var(--c), 0.75);
+    box-shadow: 0 0 14px rgba(var(--c), 0.45), inset 0 0 14px rgba(0,0,0,0.55);
+    display: flex; align-items: center; justify-content: center;
+    transition: border-color 0.5s ease, box-shadow 0.5s ease;
+    pointer-events: none;   /* clicks handled by #orb-view */
+  }
+  body.state-idle #orb { animation: breathe 4.5s ease-in-out infinite; }
+  @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+
+  #bars { display: none; align-items: center; gap: 4px; height: 34px; }
+  body.state-listening #bars { display: flex; }
+  #bars div {
+    width: 5px; border-radius: 3px; background: rgba(var(--c), 0.95);
+    height: 8px; transition: height 0.14s ease-out;
+  }
+  #arc {
+    position: absolute; inset: -8px; border-radius: 50%;
+    border: 2.5px solid transparent;
+    border-top-color: rgba(var(--c), 0.95); border-right-color: rgba(var(--c), 0.35);
+    opacity: 0; transition: opacity 0.4s ease;
+  }
+  body.state-thinking #arc { opacity: 1; animation: spin 1.6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .pulse {
+    position: absolute; inset: 0; border-radius: 50%;
+    border: 2px solid rgba(var(--c), 0.55); opacity: 0;
+  }
+  body.state-speaking .pulse    { animation: pulse 2.0s ease-out infinite; }
+  body.state-speaking .pulse.p2 { animation-delay: 1.0s; }
+  @keyframes pulse { 0% { transform: scale(1); opacity: 0.55; } 100% { transform: scale(1.55); opacity: 0; } }
+  #dot {
+    width: 14px; height: 14px; border-radius: 50%;
+    background: rgba(var(--c), 0.95); box-shadow: 0 0 10px rgba(var(--c), 0.8);
+  }
+  body.state-listening #dot, body.state-thinking #dot { display: none; }
+
+  /* ===================== DASHBOARD VIEW ===================== */
+  #dashboard-view {
+    position: fixed; inset: 0; display: flex; flex-direction: column;
+    background: var(--bg); color: var(--text); font-size: 12px;
+  }
+  .label { font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); }
+  #topbar { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .brand { display: flex; align-items: baseline; gap: 12px; }
+  .word { color: var(--accent); font-size: 15px; letter-spacing: 0.5em; }
+  .sub { font-size: 9px; letter-spacing: 0.2em; color: var(--dim); }
+  .meta { display: flex; align-items: center; gap: 14px; font-size: 10px; letter-spacing: 0.15em; color: var(--dim); }
+  .meta .sep { color: var(--line2); }
+  #hud-state { color: var(--accent); }
+  #minbtn { background: none; border: 1px solid var(--line); color: var(--dim); font: inherit; width: 24px; height: 20px; line-height: 1; cursor: pointer; }
+  #minbtn:hover { color: var(--accent); border-color: var(--line2); }
+  #main { flex: 1; display: grid; grid-template-columns: 44px 1fr 340px; gap: 14px; padding: 14px; min-height: 0; transition: grid-template-columns 0.25s ease; }
+  body.rail-open #main { grid-template-columns: 200px 1fr 340px; }
+  #rail { border: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 2px; padding: 8px 0; overflow: hidden; }
+  .railitem { display: flex; align-items: center; gap: 12px; padding: 10px 13px; cursor: pointer; white-space: nowrap; color: var(--dim); border-left: 2px solid transparent; }
+  .railitem:hover { color: var(--accent); border-left-color: var(--line2); }
+  .railitem .glyph { width: 16px; text-align: center; font-size: 13px; flex: 0 0 auto; }
+  .railitem .name { font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; opacity: 0; transition: opacity 0.2s ease; }
+  body.rail-open .railitem .name { opacity: 1; }
+  #rail .spacer { flex: 1; }
+  #sessions-list { display: none; padding: 6px 13px 10px 13px; }
+  body.rail-open #sessions-list { display: block; }
+  #sessions-list .empty { color: var(--dim); font-size: 10px; }
+  #centre { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 24px; border: 1px solid var(--line); background: var(--panel); position: relative; min-height: 0; }
+  .cornered { position: relative; }
+  .cornered::before, .cornered::after { content: ""; position: absolute; width: 12px; height: 12px; }
+  .cornered::before { top: -1px; left: -1px; border-top: 1px solid var(--accent); border-left: 1px solid var(--accent); }
+  .cornered::after { bottom: -1px; right: -1px; border-bottom: 1px solid var(--accent); border-right: 1px solid var(--accent); }
+  #orb-box { width: 220px; height: 220px; position: relative; }
+  #orb-box svg { width: 100%; height: 100%; }
+  .ring { transform-origin: 50% 50%; }
+  .r-outer { animation: rot 46s linear infinite; }
+  .r-mid   { animation: rot 30s linear infinite reverse; }
+  .r-inner { animation: rot 18s linear infinite; }
+  body.state-thinking .r-outer { animation-duration: 7s; }
+  body.state-thinking .r-mid   { animation-duration: 5s; }
+  body.state-thinking .r-inner { animation-duration: 3s; }
+  @keyframes rot { to { transform: rotate(360deg); } }
+  #core { transform-origin: 50% 50%; }
+  body.state-idle #core { animation: corebreathe 4.5s ease-in-out infinite; }
+  @keyframes corebreathe { 0%,100% { opacity: 0.55; } 50% { opacity: 1; } }
+  #pill { border: 1px solid var(--line2); color: var(--accent); padding: 6px 22px; font-size: 10px; letter-spacing: 0.35em; text-transform: uppercase; }
+  body.state-confirm #pill { color: var(--amber); border-color: rgba(232,185,79,0.4); }
+  #wave { width: 300px; height: 44px; }
+  #confirm { display: none; position: absolute; bottom: 24px; left: 50%; transform: translateX(-50%); width: 360px; max-width: 86%; background: var(--bg); border: 1px solid rgba(232,185,79,0.4); padding: 14px 16px; }
+  #confirm.show { display: block; }
+  #confirm .label { color: var(--amber); margin-bottom: 8px; }
+  #confirm-q { font-size: 12px; line-height: 1.5; margin-bottom: 12px; }
+  #confirm .buttons { display: flex; gap: 10px; }
+  #confirm button { flex: 1; background: none; font: inherit; font-size: 10px; letter-spacing: 0.25em; text-transform: uppercase; padding: 7px 0; cursor: pointer; }
+  #btn-approve { border: 1px solid rgba(79,214,232,0.4); color: var(--accent); }
+  #btn-deny { border: 1px solid var(--line); color: var(--dim); }
+  #side { display: flex; flex-direction: column; gap: 14px; min-height: 0; }
+  .panel { border: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; min-height: 0; }
+  #panel-log { flex: 2; } #panel-chat { flex: 3; }
+  .panel .head { padding: 10px 14px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  .panel .body { flex: 1; overflow-y: auto; padding: 10px 14px; min-height: 0; }
+  .logline { display: flex; gap: 8px; margin-bottom: 7px; align-items: baseline; }
+  .badge { flex: 0 0 auto; font-size: 8px; letter-spacing: 0.18em; padding: 2px 6px; text-transform: uppercase; }
+  .badge.free { color: var(--accent); border: 1px solid rgba(79,214,232,0.4); }
+  .badge.confirm { color: var(--amber); border: 1px solid rgba(232,185,79,0.4); }
+  .badge.blocked { color: var(--red); border: 1px solid rgba(232,92,92,0.4); }
+  .logline .txt { color: var(--text); font-size: 11px; line-height: 1.4; }
+  .logline .t { color: var(--dim); font-size: 9px; flex: 0 0 auto; }
+  .msg { margin-bottom: 10px; } .msg .who { margin-bottom: 3px; }
+  .msg.athena .who { color: var(--accent); }
+  .msg .text { font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; }
+  .msg .text .caret { color: var(--accent); }
+  #chat-inputrow { flex: 0 0 auto; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 8px; padding: 8px 12px; }
+  #chat-inputrow .prompt { color: var(--accent); }
+  #chat-input { flex: 1; background: none; border: none; outline: none; color: var(--text); font: inherit; font-size: 11.5px; }
+  #statusbar { flex: 0 0 auto; height: 32px; border-top: 1px solid var(--line); display: flex; align-items: center; gap: 22px; padding: 0 16px; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--dim); }
+  .dot2 { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: #2a333c; margin-right: 6px; vertical-align: middle; }
+  .dot2.on { background: var(--accent); } .dot2.off { background: var(--red); }
+  #statusbar .grow { flex: 1; }
+  #latency span { color: var(--text); }
+</style>
+</head>
+<body class="mode-orb state-idle dock-right">
+
+  <!-- full-window, always-clickable orb surface -->
+  <div id="orb-view">
+    <div id="orb">
+      <div class="pulse p1"></div>
+      <div class="pulse p2"></div>
+      <div id="arc"></div>
+      <div id="dot"></div>
+      <div id="bars"><div></div><div></div><div></div><div></div><div></div></div>
+    </div>
+  </div>
+
+  <div id="dashboard-view">
+    <header id="topbar">
+      <div class="brand"><span class="word">ATHENA</span><span class="sub">// WINDOWS VOICE ASSISTANT</span></div>
+      <div class="meta">
+        <span id="hud-state">AWAITING</span><span class="sep">|</span>
+        <span>WAKE: HEY_JARVIS</span><span class="sep">|</span>
+        <span id="clock">--:--:--</span>
+        <button id="minbtn" title="collapse to orb">&ndash;</button>
+      </div>
+    </header>
+    <div id="main">
+      <nav id="rail">
+        <div class="railitem" id="rail-sessions"><span class="glyph">&#9636;</span><span class="name">Sessions</span></div>
+        <div id="sessions-list"><div class="label">Sessions</div><div class="empty">&mdash; none yet &mdash;</div></div>
+        <div class="railitem"><span class="glyph">&#9671;</span><span class="name">Plans</span></div>
+        <div class="railitem"><span class="glyph">&#9672;</span><span class="name">Memory</span></div>
+        <div class="railitem"><span class="glyph">&#10022;</span><span class="name">Settings</span></div>
+        <div class="spacer"></div>
+        <div class="railitem" id="rail-orb"><span class="glyph">&#9675;</span><span class="name">Orb mode</span></div>
+      </nav>
+      <section id="centre" class="cornered">
+        <div id="orb-box">
+          <svg viewBox="0 0 240 240" xmlns="http://www.w3.org/2000/svg">
+            <g class="ring r-outer"><circle cx="120" cy="120" r="104" fill="none" stroke="rgba(79,214,232,0.28)" stroke-width="1" stroke-dasharray="140 30 8 30 220 30"/></g>
+            <g class="ring r-mid"><circle cx="120" cy="120" r="82" fill="none" stroke="rgba(79,214,232,0.45)" stroke-width="1" stroke-dasharray="90 26 6 26 160 26"/></g>
+            <g class="ring r-inner"><circle cx="120" cy="120" r="60" fill="none" stroke="rgba(79,214,232,0.6)" stroke-width="1.5" stroke-dasharray="55 20 4 20 100 20"/></g>
+            <circle id="core" cx="120" cy="120" r="16" fill="rgba(79,214,232,0.85)"/>
+            <circle cx="120" cy="120" r="4" fill="#05080c"/>
+          </svg>
+        </div>
+        <div id="pill">Awaiting</div>
+        <canvas id="wave" width="300" height="44"></canvas>
+        <div id="confirm" class="cornered">
+          <div class="label">Confirmation required</div>
+          <div id="confirm-q"></div>
+          <div class="buttons"><button id="btn-approve">Approve</button><button id="btn-deny">Deny</button></div>
+        </div>
+      </section>
+      <aside id="side">
+        <div class="panel cornered" id="panel-log"><div class="head label">Tool log</div><div class="body" id="log"></div></div>
+        <div class="panel cornered" id="panel-chat">
+          <div class="head label">Transcript</div>
+          <div class="body" id="chat"></div>
+          <div id="chat-inputrow"><span class="prompt">&gt;</span><input id="chat-input" autocomplete="off" spellcheck="false" placeholder="type to athena..."></div>
+        </div>
+      </aside>
+    </div>
+    <footer id="statusbar">
+      <span><i class="dot2" id="dot-groq"></i>groq</span>
+      <span><i class="dot2" id="dot-supabase"></i>supabase</span>
+      <span><i class="dot2" id="dot-mic"></i>mic</span>
+      <span class="grow"></span>
+      <span id="stat-cpu">CPU --%</span><span id="stat-bat">BAT --%</span>
+      <span id="latency">STT <span id="lat-stt">-</span> / BRAIN <span id="lat-brain">-</span> / TTS <span id="lat-tts">-</span></span>
+    </footer>
+  </div>
+
+<script>
+  "use strict";
+  console.log("[app] script start");
+
+  /* guarded, logged bridge into Python */
+  function callApi(name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api[name]) {
+        return window.pywebview.api[name].apply(null, args);
+      }
+      console.warn("[app] api not ready, dropped:", name);
+    } catch (err) {
+      console.error("[app] api call failed:", name, err);
+    }
+  }
+
+  /* view toggles (called from Python) */
+  window.showDashboard = function () {
+    document.body.classList.remove("mode-orb");
+    document.body.classList.add("mode-dashboard");
+    console.log("[app] showDashboard");
+  };
+  window.showOrb = function () {
+    document.body.classList.remove("mode-dashboard");
+    document.body.classList.add("mode-orb");
+    console.log("[app] showOrb");
+  };
+  window.setDock = function (side) {
+    document.body.classList.toggle("dock-left", side === "left");
+    document.body.classList.toggle("dock-right", side !== "left");
+  };
+
+  /* state + amplitude drive both views */
+  var STATES = ["idle", "listening", "thinking", "speaking", "confirm"];
+  var PILL = { idle: "Awaiting", listening: "Listening", thinking: "Thinking", speaking: "Speaking", confirm: "Confirm" };
+  window.setState = function (s) {
+    if (STATES.indexOf(s) === -1) { s = "idle"; }
+    STATES.forEach(function (st) { document.body.classList.remove("state-" + st); });
+    document.body.classList.add("state-" + s);
+    var pill = document.getElementById("pill"); if (pill) { pill.textContent = PILL[s]; }
+    var hud = document.getElementById("hud-state"); if (hud) { hud.textContent = PILL[s].toUpperCase(); }
+    console.log("[app] setState " + s);
+    return s;
+  };
+  var ampTarget = 0, amp = 0;
+  window.setAmplitude = function (v) { ampTarget = Math.max(0, Math.min(1, Number(v) || 0)); };
+  var bars = document.querySelectorAll("#bars div");
+  var mults = [0.5, 0.8, 1.0, 0.8, 0.5];
+  var waveCtx = document.getElementById("wave").getContext("2d");
+  var coreEl = document.getElementById("core");
+  function animLoop(now) {
+    amp += (ampTarget - amp) * 0.12;
+    for (var i = 0; i < bars.length; i++) {
+      var wob = 0.8 + 0.2 * Math.sin(now / 260 + i * 1.4);
+      bars[i].style.height = (7 + amp * 26 * mults[i] * wob) + "px";
+    }
+    waveCtx.clearRect(0, 0, 300, 44);
+    waveCtx.fillStyle = "rgba(79,214,232,0.8)";
+    var n = 46, bw = 3, gap = 300 / n;
+    for (var j = 0; j < n; j++) {
+      var c = 1 - Math.abs(j - n / 2) / (n / 2);
+      var w2 = 0.55 + 0.45 * Math.sin(now / 300 + j * 0.9);
+      var hh = 2 + amp * 36 * c * w2;
+      waveCtx.fillRect(j * gap, 22 - hh / 2, bw, hh);
+    }
+    if (coreEl) { coreEl.setAttribute("r", 16 + amp * 6); }
+    requestAnimationFrame(animLoop);
+  }
+  requestAnimationFrame(animLoop);
+
+  /* dashboard helpers (called from Python) */
+  window.addLogLine = function (text, tier, ts) {
+    tier = ["free", "confirm", "blocked"].indexOf(tier) !== -1 ? tier : "free";
+    var box = document.getElementById("log"), row = document.createElement("div");
+    row.className = "logline";
+    row.innerHTML = '<span class="t">' + (ts || new Date().toTimeString().slice(0, 8)) + '</span><span class="badge ' + tier + '">' + tier + "</span>";
+    var txt = document.createElement("span"); txt.className = "txt"; txt.textContent = String(text);
+    row.appendChild(txt); box.appendChild(row);
+    while (box.children.length > 200) { box.removeChild(box.firstChild); }
+    box.scrollTop = box.scrollHeight;
+  };
+  window.addTranscript = function (who, text, instant) {
+    var box = document.getElementById("chat");
+    var isA = String(who).toLowerCase().indexOf("athena") === 0, last = box.lastElementChild, msg;
+    if (last && last.classList.contains("msg") && last.classList.contains("athena") === isA) { msg = last; }
+    else { msg = document.createElement("div"); msg.className = "msg" + (isA ? " athena" : ""); msg.innerHTML = '<div class="who label">' + (isA ? "Athena" : "You") + "</div>"; box.appendChild(msg); }
+    var span = document.createElement("div"); span.className = "text"; msg.appendChild(span);
+    var full = String(text);
+    if (instant) { span.textContent = full; box.scrollTop = box.scrollHeight; return; }
+    var i = 0, t = setInterval(function () { i++; span.textContent = full.slice(0, i); if (i < full.length) { span.innerHTML += '<span class="caret">_</span>'; } box.scrollTop = box.scrollHeight; if (i >= full.length) { clearInterval(t); } }, 14);
+  };
+  function setDot(id, v) { document.getElementById(id).className = "dot2 " + (v ? "on" : "off"); }
+  window.setStatus = function (o) {
+    o = o || {};
+    if ("groq" in o) setDot("dot-groq", o.groq);
+    if ("supabase" in o) setDot("dot-supabase", o.supabase);
+    if ("mic" in o) setDot("dot-mic", o.mic);
+    if ("cpu" in o) document.getElementById("stat-cpu").textContent = "CPU " + Math.round(o.cpu) + "%";
+    if ("battery" in o) document.getElementById("stat-bat").textContent = "BAT " + Math.round(o.battery) + "%";
+    if ("stt" in o) document.getElementById("lat-stt").textContent = Number(o.stt).toFixed(2) + "s";
+    if ("brain" in o) document.getElementById("lat-brain").textContent = Number(o.brain).toFixed(2) + "s";
+    if ("tts" in o) document.getElementById("lat-tts").textContent = Number(o.tts).toFixed(2) + "s";
+  };
+  window.showConfirm = function (q) { document.getElementById("confirm-q").textContent = String(q); document.getElementById("confirm").classList.add("show"); };
+  window.hideConfirm = function () { document.getElementById("confirm").classList.remove("show"); };
+  window.openSessions = function () { document.body.classList.add("rail-open"); };
+  window.closeSessions = function () { document.body.classList.remove("rail-open"); };
+  window.showBubble = function () {};       /* opaque orb has no side bubble; no-op keeps main.py happy */
+  window.measureBubble = function () { return 0; };
+
+  function tickClock() { var c = document.getElementById("clock"); if (c) c.textContent = new Date().toTimeString().slice(0, 8); }
+  tickClock(); setInterval(tickClock, 1000);
+
+  /* ================= interaction: wired only after pywebviewready ================= */
+  var dragging = false, startX = 0, startY = 0, lastX = 0, lastY = 0, startTime = 0, moved = 0;
+
+  function onDown(e) {
+    dragging = true; moved = 0;
+    startX = lastX = e.screenX; startY = lastY = e.screenY; startTime = Date.now();
+    e.preventDefault();
+    console.log("mousedown");
+  }
+  function onMove(e) {
+    if (!dragging) { return; }
+    var dx = e.screenX - lastX, dy = e.screenY - lastY;
+    lastX = e.screenX; lastY = e.screenY;
+    moved = Math.max(moved, Math.hypot(e.screenX - startX, e.screenY - startY));
+    if (dx !== 0 || dy !== 0) { callApi("move_window", dx, dy); }
+  }
+  function onUp(e) {
+    if (!dragging) { return; }
+    dragging = false;
+    var held = Date.now() - startTime;
+    console.log("mouseup (moved=" + moved.toFixed(0) + "px, held=" + held + "ms)");
+    if (moved < 6 && held < 300) {
+      console.log("CLICK");
+      callApi("expand");
+    } else if (moved < 6) {
+      // a still but slower click - still a click, not a drag (no dead zone)
+      console.log("CLICK (slow)");
+      callApi("expand");
+    } else {
+      console.log("DRAG -> snap");
+      callApi("drag_ended");
+    }
+  }
+  function onKey(e) {
+    if (e.key === "Escape") {
+      var input = document.getElementById("chat-input");
+      if (document.activeElement === input && input.value) { input.value = ""; }
+      else if (document.body.classList.contains("mode-dashboard")) { console.log("Escape -> collapse"); callApi("collapse"); }
+    }
+  }
+  function onChatKey(e) {
+    if (e.key === "Enter" && this.value.trim()) { callApi("typed_input", this.value.trim()); this.value = ""; }
+  }
+
+  function wire() {
+    var orb = document.getElementById("orb-view");
+    orb.addEventListener("mousedown", onDown);
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    document.addEventListener("keydown", onKey);
+    document.getElementById("chat-input").addEventListener("keydown", onChatKey);
+    document.getElementById("minbtn").addEventListener("click", function () { callApi("collapse"); });
+    document.getElementById("rail-orb").addEventListener("click", function () { callApi("collapse"); });
+    document.getElementById("rail-sessions").addEventListener("click", function () { document.body.classList.toggle("rail-open"); });
+    document.getElementById("btn-approve").addEventListener("click", function () { window.hideConfirm(); callApi("confirm_answer", true); });
+    document.getElementById("btn-deny").addEventListener("click", function () { window.hideConfirm(); callApi("confirm_answer", false); });
+    console.log("[app] handlers wired (pywebviewready)");
+  }
+
+  // CRITICAL: wire only after the bridge exists.
+  if (window.pywebview && window.pywebview.api) { wire(); }
+  else { window.addEventListener("pywebviewready", wire); }
+</script>
+</body>
+</html>

@@ -118,6 +118,20 @@ def lock_screen() -> str:
     return "Windows refused to lock the screen, sorry."
 
 
+def look_up(query: str) -> str:
+    """Search the web and speak a short factual answer (does NOT open a tab)."""
+    from athena import research  # lazy so tavily loads only if used
+    print(f"[skills] looking up: {query!r}")
+    return research.look_up(query)
+
+
+def research_topic(topic: str) -> str:
+    """Deeper multi-source web summary, spoken aloud."""
+    from athena import research
+    print(f"[skills] researching: {topic!r}")
+    return research.research(topic)
+
+
 def see_screen(question: str, focus: str = "screen") -> str:
     """Look at the user's screen (or just the active window) and answer a
     question about what's shown. focus is 'screen' or 'window'."""
@@ -183,6 +197,8 @@ SKILLS = {
     "lock_screen": lock_screen,
     "get_system_info": get_system_info,
     "see_screen": see_screen,
+    "look_up": look_up,
+    "research": research_topic,
     "open_dashboard": open_dashboard,
     "close_dashboard": close_dashboard,
 }

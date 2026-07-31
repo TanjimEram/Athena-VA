@@ -16,3 +16,4 @@ supabase
 mss
 Pillow
 pygetwindow
+tavily-python

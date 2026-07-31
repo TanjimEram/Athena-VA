@@ -141,6 +141,19 @@ save_screenshot(path=None, active_window_only=False) -> str | None
 Adding a skill = write the function, add it to `SKILLS`, add its schema to
 `brain.TOOLS`, and put its name in one of the sets in `safety.py`.
 
+### athena/research.py — live web research, spoken (DONE)
+Tavily (key in `config.TAVILY_API_KEY`). Unlike `web_search` (which only
+OPENS a browser tab), these fetch and SPEAK the answer:
+- `look_up(query)` - short 1-3 sentence answer via Tavily search
+  (include_answer), plus the source site names.
+- `research(topic)` - deeper: multi-source search + top-page extract, then
+  the LLM condenses it to a concise spoken summary and offers to go deeper.
+Both fail gracefully with a spoken message (no key / no internet / API error)
+and are bounded so they don't hang the turn. Skills `look_up` / `research`
+(free tier) dispatch to them; the brain routes factual/"latest" questions to
+look_up, "research X"/"tell me about X" to research, and only "open a search"
+to web_search.
+
 ### athena/memory.py — long-term memory (DONE)
 Supabase (free cloud Postgres) `interactions` table; the schema SQL is in
 memory.py's docstring. brain.think logs every exchange (async, so it never

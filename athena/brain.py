@@ -11,33 +11,41 @@ import groq
 
 from athena import config, memory, safety, skills
 
-SYSTEM_PROMPT = (
-    f"You are {config.ASSISTANT_NAME}, a voice assistant on the user's Windows "
-    "PC. You are calm, warm, and intelligent, with a composed presence like "
-    "FRIDAY from Iron Man. Everything you say is read aloud by a voice, so it "
-    "must sound natural when spoken: one or two short sentences, never "
-    "paragraphs. No markdown, no bullet points, no lists, no emoji. Be "
-    "concise and never repeat the user's request back to them. If you can't "
-    "do something, say so plainly in one sentence.\n\n"
-    "WHEN TO USE A TOOL - read this carefully:\n"
-    "Only call a tool when the user gives a CLEAR command to perform an "
-    "action (open, close, set, search, play, lock, show me, do X). If the "
-    "user is asking a question, chatting, or asking what you can do, DO NOT "
-    "call any tool - just answer in words. When you're unsure whether "
-    "something is a request for action or just conversation, do NOT act: "
-    "answer, and ask if they'd like you to do it. When you do perform an "
-    "action, confirm it briefly and naturally, like 'Chrome's open.' rather "
-    "than 'I have successfully opened Google Chrome.' Never invent tools you "
-    "don't have.\n\n"
-    "Examples:\n"
-    "- User: \"what can you do?\" -> No tool. Briefly describe your abilities: "
-    f"you can {config.CAPABILITIES}.\n"
-    "- User: \"open chrome\" -> Call open_app with name Chrome.\n"
-    "- User: \"what's the weather like?\" -> No tool; answer in words. Only "
-    "search the web if they clearly ask you to look it up.\n"
-    "- User: \"how are you?\" -> No tool; just chat.\n"
-    "- User: \"lock my screen\" -> Call lock_screen."
-)
+DEFAULT_PERSONALITY = ("calm, warm, and intelligent, with a composed presence "
+                       "like FRIDAY from Iron Man")
+
+
+def _system_prompt() -> str:
+    """Built at CALL TIME so a personality change in the dashboard applies on
+    the next reply without a restart."""
+    from athena import settings
+    personality = settings.get("personality", DEFAULT_PERSONALITY) or DEFAULT_PERSONALITY
+    return (
+        f"You are {config.ASSISTANT_NAME}, a voice assistant on the user's Windows "
+        f"PC. You are {personality}. Everything you say is read aloud by a voice, "
+        "so it must sound natural when spoken: one or two short sentences, never "
+        "paragraphs. No markdown, no bullet points, no lists, no emoji. Be "
+        "concise and never repeat the user's request back to them. If you can't "
+        "do something, say so plainly in one sentence.\n\n"
+        "WHEN TO USE A TOOL - read this carefully:\n"
+        "Only call a tool when the user gives a CLEAR command to perform an "
+        "action (open, close, set, search, play, lock, show me, do X). If the "
+        "user is asking a question, chatting, or asking what you can do, DO NOT "
+        "call any tool - just answer in words. When you're unsure whether "
+        "something is a request for action or just conversation, do NOT act: "
+        "answer, and ask if they'd like you to do it. When you do perform an "
+        "action, confirm it briefly and naturally, like 'Chrome's open.' rather "
+        "than 'I have successfully opened Google Chrome.' Never invent tools you "
+        "don't have.\n\n"
+        "Examples:\n"
+        "- User: \"what can you do?\" -> No tool. Briefly describe your abilities: "
+        f"you can {config.CAPABILITIES}.\n"
+        "- User: \"open chrome\" -> Call open_app with name Chrome.\n"
+        "- User: \"what's the weather like?\" -> No tool; answer in words. Only "
+        "search the web if they clearly ask you to look it up.\n"
+        "- User: \"how are you?\" -> No tool; just chat.\n"
+        "- User: \"lock my screen\" -> Call lock_screen."
+    )
 
 # One schema entry per skill. The model reads these descriptions to decide
 # which tool fits, so keep them plain and specific.
@@ -80,7 +88,13 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "web_search",
-            "description": "Search the web for current information the assistant doesn't know.",
+            "description": (
+                "OPEN a Google search in the user's browser (opens a tab; does "
+                "NOT read or speak the answer). Only use when the user asks to "
+                "'open a search', 'search in the browser', 'Google this', or "
+                "otherwise wants a browser tab. To answer a question out loud, "
+                "use look_up or research instead."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -90,6 +104,51 @@ TOOLS = [
                     }
                 },
                 "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "look_up",
+            "description": (
+                "Answer a factual or current-events question by searching the "
+                "web and SPEAKING the answer - for 'what is', 'who is', "
+                "'what's the latest on', 'how much is', anything you can't "
+                "answer from memory. Reads the results and gives a short "
+                "spoken answer; does not open a browser tab."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "The question to answer.",
+                    }
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "research",
+            "description": (
+                "A deeper multi-source summary, spoken aloud - for 'research "
+                "X', 'tell me about X', 'summarize the latest on X'. Searches "
+                "several sources, reads them, and gives a concise spoken "
+                "summary of the key points."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "topic": {
+                        "type": "string",
+                        "description": "The topic to research.",
+                    }
+                },
+                "required": ["topic"],
             },
         },
     },
@@ -176,17 +235,27 @@ TOOLS = [
 
 def _chat(messages: list, use_tools: bool, max_tokens: int | None = None,
           temperature: float | None = None):
-    """One completion call to Groq, with or without the tools array."""
+    """One completion call to Groq. Model + reply-length read from settings
+    at CALL TIME so dashboard changes apply on the next turn."""
+    from athena import settings
     kwargs = dict(
-        model=config.BRAIN_MODEL,
+        model=settings.get("brain_model", config.BRAIN_MODEL),
         messages=messages,
         temperature=config.BRAIN_TEMPERATURE if temperature is None else temperature,
-        max_tokens=max_tokens or config.BRAIN_MAX_TOKENS,
+        max_tokens=max_tokens or int(settings.get("brain_max_tokens", config.BRAIN_MAX_TOKENS)),
     )
     if use_tools:
-        kwargs["tools"] = TOOLS
+        kwargs["tools"] = _active_tools()
         kwargs["tool_choice"] = "auto"
     return config.get_groq_client().chat.completions.create(**kwargs)
+
+
+def _active_tools() -> list:
+    """The tool list minus any skills the user has toggled off in settings -
+    so disabled skills are truly removed from the brain's options."""
+    from athena import settings
+    return [t for t in TOOLS
+            if settings.is_skill_enabled(t["function"]["name"])]
 
 
 _memory_context = None
@@ -232,7 +301,7 @@ def think(user_text: str, history: list | None = None) -> dict:
 
 
 def _build_messages(user_text: str, history: list | None) -> list:
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _system_prompt()}]
     memory_context = _get_memory_context()
     if memory_context:
         messages.append({"role": "system", "content": memory_context})
@@ -346,14 +415,15 @@ def think_stream(user_text: str, history: list | None = None):
     def generate():
         started = time.monotonic()
         tool_acc: dict[int, dict] = {}
+        from athena import settings
         try:
             stream = config.get_groq_client().chat.completions.create(
-                model=config.BRAIN_MODEL,
+                model=settings.get("brain_model", config.BRAIN_MODEL),
                 messages=_build_messages(user_text, history),
-                tools=TOOLS,
+                tools=_active_tools(),
                 tool_choice="auto",
                 temperature=config.BRAIN_TEMPERATURE,
-                max_tokens=config.BRAIN_MAX_TOKENS,
+                max_tokens=int(settings.get("brain_max_tokens", config.BRAIN_MAX_TOKENS)),
                 stream=True,
             )
             for chunk in stream:
@@ -751,7 +821,10 @@ def _handle_call(call, confirm, declined: set, ran_sigs: dict) -> tuple[dict, st
         step["result"] = f"Not allowed: {tool} is off-limits."
         return step, NOT_DONE, False
 
-    if tier == "confirm":
+    # Confirm-before-acting can be turned off in settings; then confirm-tier
+    # actions run straight away (read at call time so the toggle is live).
+    from athena import settings
+    if tier == "confirm" and settings.get("confirm_before_acting", True):
         if tool in declined:                     # already said no this turn
             step["status"] = "skipped"
             step["result"] = f"Skipped {tool.replace('_', ' ')} (already declined)."
@@ -835,7 +908,7 @@ def _summarize_from_ledger(user_text: str, steps: list) -> str:
         # the model will confabulate them into the summary. It should narrate
         # ONLY these real results.
         messages = [
-            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "system", "content": _system_prompt()},
             {"role": "user", "content": (
                 "Here is exactly what you just did, with the real results:\n"
                 + ledger + "\n\nGive one short spoken summary of just these "

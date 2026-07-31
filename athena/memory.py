@@ -61,11 +61,22 @@ def _get_client():
         return None
 
 
+def _enabled() -> bool:
+    """Memory can be turned off in settings (read live)."""
+    try:
+        from athena import settings
+        return bool(settings.get("memory_enabled", True))
+    except Exception:
+        return True
+
+
 def log_interaction(user_text: str, reply: str,
                     tool_called: str | None = None,
                     tool_args: dict | None = None) -> bool:
     """Write one exchange to the interactions table. Returns True if saved,
-    False (with a one-time console warning) if memory is unreachable."""
+    False (with a one-time console warning) if memory is unreachable or off."""
+    if not _enabled():
+        return False
     client = _get_client()
     if client is None:
         return False

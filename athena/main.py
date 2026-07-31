@@ -26,7 +26,7 @@ import numpy as np
 import psutil
 import pygame
 
-from athena import audio_io, brain, config, memory, skills, stt, tts, ui, wake
+from athena import audio_io, brain, config, memory, settings, skills, stt, tts, ui, wake
 
 FOLLOWUP_SECONDS = 6
 CONFIRM_LISTEN_SECONDS = 5
@@ -137,7 +137,8 @@ def is_yes(text: str) -> bool:
 
 def wants_sleep(text: str) -> bool:
     text = text.lower()
-    return any(phrase in text for phrase in SLEEP_PHRASES)
+    phrases = settings.get("sleep_phrases", list(SLEEP_PHRASES)) or SLEEP_PHRASES
+    return any(str(phrase).lower() in text for phrase in phrases)
 
 
 def _await_confirmation() -> bool:
@@ -268,7 +269,7 @@ def process_turn(user_text: str, spoken: bool = True) -> None:
             # Follow-up window: keep talking, no wake word needed.
             followup = ""
             try:
-                followup = hear(max_seconds=FOLLOWUP_SECONDS)
+                followup = hear(max_seconds=float(settings.get("followup_seconds", FOLLOWUP_SECONDS)))
             except Exception as exc:
                 print(f"[main] follow-up listen error: {exc!r}")
             if not followup:
@@ -344,6 +345,11 @@ def assistant_loop() -> None:
     while _running.is_set():
         try:
             ui.set_state("idle")
+            # Wake word can be turned off in settings (live). Then Athena only
+            # responds to the dashboard / typed input, not the mic.
+            if not settings.get("wake_enabled", True):
+                time.sleep(1.0)
+                continue
             # Short listening bursts so window-close shuts us down within ~3 s.
             if not wake.listen_for_wake(timeout=3):
                 continue

@@ -15,6 +15,10 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
+# Tavily (live web research - search, read, summarize). Optional: without it
+# the look_up/research skills say they can't reach the web instead of failing.
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+
 # Model names live here so swapping models is a one-line change.
 BRAIN_MODEL = "llama-3.3-70b-versatile"
 

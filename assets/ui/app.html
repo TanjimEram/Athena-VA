@@ -167,6 +167,60 @@
   .dot2.on { background: var(--accent); } .dot2.off { background: var(--red); }
   #statusbar .grow { flex: 1; }
   #latency span { color: var(--text); }
+  #gearbtn { background:none; border:1px solid var(--line); color:var(--dim); font:inherit; width:24px; height:20px; line-height:1; cursor:pointer; }
+  #gearbtn:hover { color: var(--accent); border-color: var(--line2); }
+
+  /* ---- settings overlay ---- */
+  #settings-view {
+    display: none; position: fixed; inset: 0; z-index: 50;
+    background: var(--bg); color: var(--text);
+    flex-direction: column; font-size: 12px;
+  }
+  body.show-settings.mode-dashboard #settings-view { display: flex; }
+  #settings-head {
+    display: flex; align-items: center; gap: 14px; height: 44px;
+    padding: 0 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto;
+  }
+  #settings-back, #reset-btn {
+    background: none; border: 1px solid var(--line); color: var(--dim);
+    font: inherit; font-size: 10px; letter-spacing: 0.1em; padding: 5px 10px; cursor: pointer;
+  }
+  #settings-back:hover, #reset-btn:hover { color: var(--accent); border-color: var(--line2); }
+  #saved-tick { color: #34d399; font-size: 10px; letter-spacing: 0.1em; opacity: 0; transition: opacity 0.2s; }
+  #saved-tick.show { opacity: 1; }
+  #settings-body { flex: 1; overflow-y: auto; padding: 18px; display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-content: start; }
+  .sgroup { border: 1px solid var(--line); background: var(--panel); padding: 12px 14px; }
+  .sgroup h3 { margin: 0 0 12px; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  .srow { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 11px; }
+  .srow:last-child { margin-bottom: 0; }
+  .slabel { color: var(--dim); font-size: 10px; letter-spacing: 0.06em; flex: 0 0 auto; }
+  .srow .ctl { flex: 1; display: flex; justify-content: flex-end; align-items: center; gap: 8px; }
+  .srow input[type=range] { width: 130px; accent-color: var(--accent); }
+  .srow select, .srow input[type=text], .srow input[type=number], .srow textarea {
+    background: var(--bg); border: 1px solid var(--line); color: var(--text);
+    font: inherit; font-size: 11px; padding: 4px 6px; max-width: 190px;
+  }
+  .srow textarea { width: 100%; max-width: 100%; resize: vertical; min-height: 46px; }
+  .srow.col { flex-direction: column; align-items: stretch; }
+  .rangeval { color: var(--text); font-size: 10px; min-width: 34px; text-align: right; }
+  .toggle { width: 34px; height: 18px; border-radius: 10px; background: #2a333c; position: relative; cursor: pointer; transition: background 0.2s; flex: 0 0 auto; }
+  .toggle.on { background: var(--accent); }
+  .toggle .knob { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: left 0.2s; }
+  .toggle.on .knob { left: 18px; }
+  .tier { font-size: 8px; letter-spacing: 0.12em; padding: 1px 5px; text-transform: uppercase; border: 1px solid; }
+  .tier.free { color: var(--accent); border-color: rgba(79,214,232,0.4); }
+  .tier.confirm { color: var(--amber); border-color: rgba(232,185,79,0.4); }
+  .tier.blocked { color: var(--red); border-color: rgba(232,92,92,0.4); }
+  .restart-note { color: var(--amber); font-size: 8px; letter-spacing: 0.08em; }
+  .testbtn { background:none; border:1px solid var(--line); color:var(--dim); font:inherit; font-size:9px; padding:3px 7px; cursor:pointer; }
+  .testbtn:hover { color: var(--accent); }
+  .testdot { width: 7px; height: 7px; border-radius: 50%; background: #2a333c; display:inline-block; }
+  .testdot.ok { background: #34d399; } .testdot.fail { background: var(--red); }
+  .minibtn { background:none; border:1px solid var(--line); color:var(--dim); font:inherit; font-size:9px; padding:4px 9px; cursor:pointer; }
+  .minibtn:hover { color: var(--accent); border-color: var(--line2); }
+  #mem-recent .mrow { font-size: 10px; color: var(--dim); margin-top: 6px; line-height: 1.4; }
+  #mem-recent .mrow b { color: var(--text); font-weight: normal; }
 </style>
 </head>
 <body class="mode-orb state-idle dock-right">
@@ -189,6 +243,7 @@
         <span id="hud-state">AWAITING</span><span class="sep">|</span>
         <span>WAKE: HEY_JARVIS</span><span class="sep">|</span>
         <span id="clock">--:--:--</span>
+        <button id="gearbtn" title="settings">&#9881;</button>
         <button id="minbtn" title="collapse to orb">&ndash;</button>
       </div>
     </header>
@@ -237,6 +292,18 @@
       <span id="stat-cpu">CPU --%</span><span id="stat-bat">BAT --%</span>
       <span id="latency">STT <span id="lat-stt">-</span> / BRAIN <span id="lat-brain">-</span> / TTS <span id="lat-tts">-</span></span>
     </footer>
+  </div>
+
+  <!-- settings overlay (shown over the dashboard; NOT a new window) -->
+  <div id="settings-view">
+    <header id="settings-head">
+      <button id="settings-back" title="back to dashboard">&#8592; Back</button>
+      <span class="word" style="font-size:13px">SETTINGS</span>
+      <span class="grow"></span>
+      <span id="saved-tick">saved &#10003;</span>
+      <button id="reset-btn" title="reset all to defaults">Reset defaults</button>
+    </header>
+    <div id="settings-body"></div>
   </div>
 
 <script>
@@ -353,6 +420,146 @@
   function tickClock() { var c = document.getElementById("clock"); if (c) c.textContent = new Date().toTimeString().slice(0, 8); }
   tickClock(); setInterval(tickClock, 1000);
 
+  /* ================= settings view ================= */
+  function apiAsync(name) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api[name]) {
+        return window.pywebview.api[name].apply(null, args);   // returns a Promise
+      }
+    } catch (err) { console.error("[app] apiAsync failed:", name, err); }
+    return Promise.resolve(null);
+  }
+  var _savedTimer = null;
+  function showSaved() {
+    var t = document.getElementById("saved-tick");
+    t.classList.add("show");
+    if (_savedTimer) clearTimeout(_savedTimer);
+    _savedTimer = setTimeout(function () { t.classList.remove("show"); }, 1200);
+  }
+  function save(key, value) { apiAsync("save_setting", key, value).then(function (r) {
+    showSaved();
+    if (key === "accent_color") document.documentElement.style.setProperty("--accent", value);
+  }); }
+
+  function el(tag, cls, txt) { var e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; }
+  function row(labelText) { var r = el("div", "srow"); r.appendChild(el("span", "slabel", labelText)); var c = el("div", "ctl"); r.appendChild(c); r._ctl = c; return r; }
+
+  function toggle(val, onChange) {
+    var t = el("div", "toggle" + (val ? " on" : "")); t.appendChild(el("div", "knob"));
+    t.addEventListener("click", function () { var nv = !t.classList.contains("on"); t.classList.toggle("on", nv); onChange(nv); });
+    return t;
+  }
+  function rangeCtl(val, min, max, step, suffix, onChange) {
+    var wrap = document.createElement("span"); wrap.style.display = "flex"; wrap.style.alignItems = "center"; wrap.style.gap = "8px";
+    var r = el("input"); r.type = "range"; r.min = min; r.max = max; r.step = step; r.value = val;
+    var out = el("span", "rangeval", val + (suffix || ""));
+    r.addEventListener("input", function () { out.textContent = r.value + (suffix || ""); });
+    r.addEventListener("change", function () { onChange(step < 1 ? parseFloat(r.value) : parseInt(r.value)); });
+    wrap.appendChild(r); wrap.appendChild(out); return wrap;
+  }
+  function selectCtl(val, opts, onChange) {
+    var s = el("select");
+    (opts || []).forEach(function (o) { var op = el("option", null, o); op.value = o; if (o === val) op.selected = true; s.appendChild(op); });
+    s.addEventListener("change", function () { onChange(s.value); });
+    return s;
+  }
+
+  window.openSettings = function () {
+    apiAsync("get_settings").then(function (data) {
+      if (!data) { return; }
+      renderSettings(data);
+      document.body.classList.add("show-settings");
+    });
+  };
+  window.closeSettings = function () { document.body.classList.remove("show-settings"); };
+
+  function group(title) { var g = el("div", "sgroup"); g.appendChild(el("h3", null, title)); return g; }
+
+  function renderSettings(data) {
+    var v = data.values, body = document.getElementById("settings-body");
+    body.innerHTML = "";
+    document.documentElement.style.setProperty("--accent", v.accent_color || "#4fd6e8");
+
+    // Voice
+    var g = group("Voice");
+    var r = row("Voice name"); r._ctl.appendChild(selectCtl(v.tts_voice, data.voices, function (x) { save("tts_voice", x); })); g.appendChild(r);
+    r = row("Rate"); r._ctl.appendChild(rangeCtl(v.voice_rate, -50, 50, 5, "%", function (x) { save("voice_rate", x); })); g.appendChild(r);
+    r = row("Pitch"); r._ctl.appendChild(rangeCtl(v.voice_pitch, -50, 50, 5, "Hz", function (x) { save("voice_pitch", x); })); g.appendChild(r);
+    r = row("Volume"); r._ctl.appendChild(rangeCtl(v.voice_volume, -50, 50, 5, "%", function (x) { save("voice_volume", x); })); g.appendChild(r);
+    body.appendChild(g);
+
+    // Wake word
+    g = group("Wake word");
+    r = row("Model"); r._ctl.appendChild(selectCtl(v.wake_model, data.wake_models, function (x) { save("wake_model", x); }));
+    r._ctl.appendChild(el("span", "restart-note", "restart")); g.appendChild(r);
+    r = row("Sensitivity"); r._ctl.appendChild(rangeCtl(v.wake_threshold, 0.3, 0.8, 0.05, "", function (x) { save("wake_threshold", x); })); g.appendChild(r);
+    r = row("Enabled"); r._ctl.appendChild(toggle(v.wake_enabled, function (x) { save("wake_enabled", x); })); g.appendChild(r);
+    body.appendChild(g);
+
+    // Brain
+    g = group("Brain");
+    r = row("Provider"); r._ctl.appendChild(selectCtl(v.brain_provider, ["groq", "gemini", "openai", "anthropic"], function (x) { save("brain_provider", x); })); g.appendChild(r);
+    var models = (data.models && data.models[v.brain_provider]) || [v.brain_model];
+    r = row("Model"); r._ctl.appendChild(selectCtl(v.brain_model, models, function (x) { save("brain_model", x); })); g.appendChild(r);
+    r = row("Max reply length"); r._ctl.appendChild(rangeCtl(v.brain_max_tokens, 40, 400, 10, " tok", function (x) { save("brain_max_tokens", x); })); g.appendChild(r);
+    r = row("Personality"); r.className = "srow col"; var ta = el("textarea"); ta.value = v.personality || ""; ta.addEventListener("change", function () { save("personality", ta.value); }); r._ctl.style.width = "100%"; r._ctl.appendChild(ta); g.appendChild(r);
+    body.appendChild(g);
+
+    // Behavior
+    g = group("Behavior");
+    r = row("Confirm before acting"); r._ctl.appendChild(toggle(v.confirm_before_acting, function (x) { save("confirm_before_acting", x); })); g.appendChild(r);
+    r = row("Follow-up window"); r._ctl.appendChild(rangeCtl(v.followup_seconds, 2, 15, 1, "s", function (x) { save("followup_seconds", x); })); g.appendChild(r);
+    r = row("Sleep phrases"); r.className = "srow col"; var sp = el("input"); sp.type = "text"; sp.value = (v.sleep_phrases || []).join(", "); sp.style.maxWidth = "100%"; sp.addEventListener("change", function () { save("sleep_phrases", sp.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean)); }); r._ctl.style.width = "100%"; r._ctl.appendChild(sp); g.appendChild(r);
+    body.appendChild(g);
+
+    // Skills
+    g = group("Skills");
+    (data.skills || []).forEach(function (s) {
+      var rr = row(s.name); rr._ctl.appendChild(el("span", "tier " + s.tier, s.tier));
+      rr._ctl.appendChild(toggle(s.enabled, function (x) { apiAsync("save_skill", s.name, x).then(showSaved); }));
+      g.appendChild(rr);
+    });
+    body.appendChild(g);
+
+    // Appearance
+    g = group("Appearance");
+    r = row("Accent colour"); var col = el("input"); col.type = "color"; col.value = v.accent_color; col.addEventListener("change", function () { save("accent_color", col.value); }); r._ctl.appendChild(col); g.appendChild(r);
+    r = row("Orb size"); r._ctl.appendChild(rangeCtl(v.orb_size, 72, 140, 4, "px", function (x) { save("orb_size", x); })); r._ctl.appendChild(el("span", "restart-note", "restart")); g.appendChild(r);
+    r = row("Dock edge"); r._ctl.appendChild(selectCtl(v.dock_edge, ["left", "right"], function (x) { save("dock_edge", x); })); g.appendChild(r);
+    r = row("Default view"); r._ctl.appendChild(selectCtl(v.default_view, ["orb", "dashboard"], function (x) { save("default_view", x); })); g.appendChild(r);
+    body.appendChild(g);
+
+    // Connections
+    g = group("Connections");
+    Object.keys(data.keys).forEach(function (svc) {
+      var info = data.keys[svc], rr = row(svc);
+      var inp = el("input"); inp.type = "text"; inp.placeholder = info.set ? info.masked : "not set"; inp.style.maxWidth = "150px";
+      var dot = el("span", "testdot"); var test = el("button", "testbtn", "Test");
+      inp.addEventListener("change", function () { if (inp.value.trim()) { apiAsync("save_key", svc, inp.value.trim()).then(function (res) { inp.value = ""; inp.placeholder = (res && res.masked) || "saved"; showSaved(); }); } });
+      test.addEventListener("click", function () { dot.className = "testdot"; test.textContent = "..."; apiAsync("test_connection", svc).then(function (res) { test.textContent = "Test"; dot.className = "testdot " + (res && res.ok ? "ok" : "fail"); test.title = (res && res.detail) || ""; }); });
+      rr._ctl.appendChild(inp); rr._ctl.appendChild(dot); rr._ctl.appendChild(test); g.appendChild(rr);
+    });
+    body.appendChild(g);
+
+    // Memory
+    g = group("Memory");
+    r = row("Memory enabled"); r._ctl.appendChild(toggle(v.memory_enabled, function (x) { save("memory_enabled", x); })); g.appendChild(r);
+    r = el("div", "srow"); var vb = el("button", "minibtn", "View recent"); var cb = el("button", "minibtn", "Clear memory");
+    r.appendChild(vb); r.appendChild(cb); g.appendChild(r);
+    var mem = el("div"); mem.id = "mem-recent"; g.appendChild(mem);
+    vb.addEventListener("click", function () { apiAsync("recent_memory").then(function (rows) { mem.innerHTML = ""; (rows || []).forEach(function (m) { var d = el("div", "mrow"); d.innerHTML = "<b>you:</b> " + (m.user || "") + "<br><b>athena:</b> " + (m.athena || ""); mem.appendChild(d); }); if (!rows || !rows.length) mem.appendChild(el("div", "mrow", "— nothing yet —")); }); });
+    cb.addEventListener("click", function () { cb.textContent = "..."; apiAsync("clear_memory").then(function (res) { cb.textContent = "Clear memory"; mem.innerHTML = ""; mem.appendChild(el("div", "mrow", (res && res.detail) || "")); }); });
+    body.appendChild(g);
+
+    // System
+    g = group("System");
+    r = row("Start on boot"); r._ctl.appendChild(toggle(v.start_on_boot, function (x) { save("start_on_boot", x); })); g.appendChild(r);
+    r = row("Summon hotkey"); var hk = el("input"); hk.type = "text"; hk.value = v.summon_hotkey || ""; hk.placeholder = "e.g. ctrl+shift+a"; hk.addEventListener("change", function () { save("summon_hotkey", hk.value); }); r._ctl.appendChild(hk); g.appendChild(r);
+    r = row("Latency (stt/brain/tts)"); r._ctl.appendChild(el("span", "rangeval", document.getElementById("lat-stt").textContent + " / " + document.getElementById("lat-brain").textContent + " / " + document.getElementById("lat-tts").textContent)); g.appendChild(r);
+    body.appendChild(g);
+  }
+
   /* ================= interaction: wired only after pywebviewready ================= */
   var dragging = false, startX = 0, startY = 0, lastX = 0, lastY = 0, startTime = 0, moved = 0;
 
@@ -390,6 +597,7 @@
     if (e.key === "Escape") {
       var input = document.getElementById("chat-input");
       if (document.activeElement === input && input.value) { input.value = ""; }
+      else if (document.body.classList.contains("show-settings")) { window.closeSettings(); }  // settings first
       else if (document.body.classList.contains("mode-dashboard")) { console.log("Escape -> collapse"); callApi("collapse"); }
     }
   }
@@ -409,6 +617,11 @@
     document.getElementById("rail-sessions").addEventListener("click", function () { document.body.classList.toggle("rail-open"); });
     document.getElementById("btn-approve").addEventListener("click", function () { window.hideConfirm(); callApi("confirm_answer", true); });
     document.getElementById("btn-deny").addEventListener("click", function () { window.hideConfirm(); callApi("confirm_answer", false); });
+    document.getElementById("gearbtn").addEventListener("click", function () { window.openSettings(); });
+    document.getElementById("settings-back").addEventListener("click", function () { window.closeSettings(); });
+    document.getElementById("reset-btn").addEventListener("click", function () {
+      apiAsync("reset_defaults").then(function () { window.openSettings(); showSaved(); });
+    });
     console.log("[app] handlers wired (pywebviewready)");
   }
 

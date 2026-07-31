@@ -113,6 +113,39 @@ class _Api:
         else:
             print(f"[ui] confirm answered (no handler): {answer}")
 
+    # ---- settings dashboard (delegates to settings_api) ----
+    def get_settings(self):
+        from athena import settings_api
+        return settings_api.get_settings()
+
+    def save_setting(self, key, value):
+        from athena import settings_api
+        return settings_api.save_setting(key, value)
+
+    def save_skill(self, name, enabled):
+        from athena import settings_api
+        return settings_api.save_skill(str(name), bool(enabled))
+
+    def save_key(self, service, value):
+        from athena import settings_api
+        return settings_api.save_key(str(service), str(value))
+
+    def test_connection(self, service):
+        from athena import settings_api
+        return settings_api.test_connection(str(service))
+
+    def recent_memory(self):
+        from athena import settings_api
+        return settings_api.recent_memory()
+
+    def clear_memory(self):
+        from athena import settings_api
+        return settings_api.clear_memory()
+
+    def reset_defaults(self):
+        from athena import settings_api
+        return settings_api.reset_defaults()
+
 
 def start(main_fn=None, debug: bool = False) -> None:
     """Open the window in orb mode. Blocks until it closes.
@@ -276,7 +309,7 @@ def _on_loaded(*_args) -> None:
 
 
 def _after_load() -> None:
-    global _restored
+    global _restored, _dock
     time.sleep(0.3)
     if _window is None:
         return
@@ -287,6 +320,14 @@ def _after_load() -> None:
     if not _restored:
         _restored = True
         _restore_state()
+    # Appearance settings apply at launch: dock edge + accent colour.
+    try:
+        from athena import settings
+        _dock = "left" if settings.get("dock_edge", _dock) == "left" else "right"
+        accent = settings.get("accent_color", "#4fd6e8")
+        _js(f"document.documentElement.style.setProperty('--accent', {json.dumps(accent)})")
+    except Exception:
+        pass
     _dock_flush()
     _js(f"window.setDock && window.setDock('{_dock}')")
     print("[ui] app.html loaded, orb ready")

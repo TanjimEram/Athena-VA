@@ -56,10 +56,13 @@ def listen_for_wake(timeout: float | None = None) -> bool:
         with sd.InputStream(
             samplerate=16000, channels=1, dtype="int16", blocksize=CHUNK
         ) as stream:
+            from athena import settings
             while True:
                 audio, _overflowed = stream.read(CHUNK)
                 scores = model.predict(np.squeeze(audio))
-                if max(scores.values()) >= config.WAKE_THRESHOLD:
+                # Sensitivity read every loop so a slider change is live.
+                threshold = float(settings.get("wake_threshold", config.WAKE_THRESHOLD))
+                if max(scores.values()) >= threshold:
                     return True
                 frames_heard += 1
                 if max_frames is not None and frames_heard >= max_frames:

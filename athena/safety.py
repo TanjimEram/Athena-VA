@@ -4,7 +4,7 @@ the user, 'blocked' is refused. Change a tool's risk level by moving its name
 between the sets below."""
 
 FREE = {"open_app", "open_website", "web_search", "get_system_info", "see_screen",
-        "open_dashboard", "close_dashboard"}
+        "look_up", "research", "open_dashboard", "close_dashboard"}
 CONFIRM = {"set_volume", "lock_screen"}
 BLOCKED: set[str] = set()  # nothing blocked yet
 

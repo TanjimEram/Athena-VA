@@ -9,3 +9,6 @@ __pycache__/
 
 # Per-machine UI state (orb position)
 .athena_ui_state.json
+
+# Per-machine settings written by the settings dashboard
+settings.json

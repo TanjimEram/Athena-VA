@@ -80,15 +80,41 @@ async def _synth_async(text: str) -> io.BytesIO:
     # that hangs to timeout (measured, not theory). Each call gets a
     # fresh session; the persistent loop + warmup carry the savings.
     buf = io.BytesIO()
+    # Read voice + prosody from settings AT CALL TIME, so changing the voice
+    # in the dashboard applies on the very next sentence with no restart.
+    from athena import settings
+    voice = settings.get("tts_voice", config.TTS_VOICE)
+    rate = _pct(settings.get("voice_rate", 0))
+    volume = _pct(settings.get("voice_volume", 0))
+    pitch = _hz(settings.get("voice_pitch", 0))
     # Short connect timeout: the service's connects occasionally hang, and
     # failing fast + retrying on a fresh connection beats waiting 10 s.
     communicate = edge_tts.Communicate(
-        text, config.TTS_VOICE, connect_timeout=4, receive_timeout=15
+        text, voice, rate=rate, volume=volume, pitch=pitch,
+        connect_timeout=4, receive_timeout=15,
     )
     async for chunk in communicate.stream():
         if chunk["type"] == "audio":
             buf.write(chunk["data"])
     return buf
+
+
+def _pct(v) -> str:
+    """edge-tts rate/volume string, e.g. 10 -> '+10%', -5 -> '-5%'."""
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        v = 0
+    return f"{'+' if v >= 0 else ''}{v}%"
+
+
+def _hz(v) -> str:
+    """edge-tts pitch string, e.g. 10 -> '+10Hz', -5 -> '-5Hz'."""
+    try:
+        v = int(v)
+    except (TypeError, ValueError):
+        v = 0
+    return f"{'+' if v >= 0 else ''}{v}Hz"
 
 
 def _synthesize_clip(text: str) -> io.BytesIO | None:

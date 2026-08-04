@@ -46,6 +46,10 @@ DEFAULTS = {
     "orb_size": 96,           # restart to apply (window size)
     "dock_edge": "right",
     "default_view": "orb",    # orb | dashboard
+    # --- Guided mode ---
+    "guide_wait_mode": "manual",   # "manual" (say 'next') | "auto" (timer)
+    "guide_auto_seconds": 4,
+    "guide_max_steps": 12,
     # --- Memory ---
     "memory_enabled": True,
     # --- System ---

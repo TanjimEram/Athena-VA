@@ -54,9 +54,10 @@ ASSISTANT_NAME = "Athena"
 # What Athena can do, in plain words. Used to answer "what can you do?"
 # accurately - update this one line when you add a skill.
 CAPABILITIES = (
-    "open apps, open websites, search the web, set the system volume, "
-    "lock the screen, report battery and system status, and look at your "
-    "screen to answer questions about what's on it"
+    "open apps, open websites, search the web and read you the answer, set the "
+    "system volume, lock the screen, report battery and system status, look at "
+    "your screen to answer questions about it, and guide you through on-screen "
+    "tasks step by step"
 )
 BRAIN_TEMPERATURE = 0.6
 # Low on purpose: replies are spoken aloud, so a hard cap keeps her to a

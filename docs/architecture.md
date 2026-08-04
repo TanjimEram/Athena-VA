@@ -14,6 +14,32 @@ wake word -> speech-to-text -> brain (LLM + tools) -> safety -> skills -> text-t
 
 ## Modules
 
+### athena/settings.py + settings_api.py — settings dashboard (DONE)
+Runtime settings store backed by `settings.json` (gitignored, per-machine).
+`settings.py`: `get(key, default)`, `set(key, value)` (writes immediately),
+`all()`, `reset_to_defaults()`, plus skill toggles; created from config.py
+defaults on first run. Modules read via `settings.get(...)` AT CALL TIME, so
+changes apply on the next interaction with no restart — verified for voice,
+prosody, personality, brain model/max-tokens, skill enable/disable, confirm
+toggle, wake sensitivity, follow-up window, sleep phrases, memory on/off.
+`RESTART_KEYS` (wake_model, orb_size) are flagged in the UI. `settings_api.py`
+backs the webview API: `get_settings()`, `save_setting`/`save_skill`,
+`save_key` (writes masked keys to .env), `test_connection` (live-pings
+Groq/Tavily/Supabase; honest "not wired" for others), `recent_memory` /
+`clear_memory`, `reset_defaults`. The settings view is #settings-view in
+`app.html`, reached by the dashboard gear — one page, no new window.
+
+### athena/guide.py — guided mode (DONE)
+Athena reads the screen (reuses `vision.analyze_screen`) and talks the user
+through any task one step at a time. Loop: capture -> ask the vision model for
+the SINGLE next action (or exactly `DONE`) -> speak it -> wait. Wait mode is a
+setting: `manual` (say "next"/"done", the reliable demo default) or `auto`
+(re-check on a timer). Tracks the last instruction so it never repeats a step;
+stops on DONE or `guide_max_steps`. She only INSTRUCTS - never clicks. Presets
+map phrases like "train your wake word" to a detailed openWakeWord-Colab goal.
+Skill `guide_me(goal)` (free tier); main.py wires `guide.set_io` so the orb
+reacts (speaking/listening) during a guide.
+
 ### athena/config.py  — settings (DONE)
 Loads `.env`, holds every constant. No other file reads environment variables.
 

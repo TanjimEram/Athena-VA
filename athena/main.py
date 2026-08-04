@@ -390,6 +390,11 @@ def main() -> None:
     _running.set()
     _stopping.clear()
     skills.set_ui(ui)                    # wire the open/close dashboard skills
+    # Guided mode speaks/listens through the UI-aware helpers so the orb
+    # reacts (speaking / listening) as it walks the user through a task.
+    from athena import guide
+    guide.set_io(speak_fn=speak,
+                 listen_fn=lambda: hear(max_seconds=float(settings.get("followup_seconds", 6))))
     ui.on_typed_input = _on_typed
     ui.on_confirm = _on_confirm_click
     # ui.on_orb_click stays default: click expands to the dashboard.

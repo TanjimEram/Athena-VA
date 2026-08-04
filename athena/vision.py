@@ -93,9 +93,12 @@ VISION_SYSTEM_PROMPT = (
 )
 
 
-def ask_about_screen(question: str, active_window_only: bool = False) -> str:
-    """Capture the screen (or active window), send it with the question to
-    Groq's vision model, and return a concise spoken answer."""
+def analyze_screen(question: str, system_prompt: str = VISION_SYSTEM_PROMPT,
+                   active_window_only: bool = False, max_tokens: int = 200) -> str:
+    """Capture the screen (or active window) and ask the vision model about it
+    with a caller-supplied system prompt. Returns the model's text (with any
+    <think> reasoning stripped), or a spoken error string. Shared by
+    ask_about_screen and the guided-mode loop so both reuse one capture path."""
     try:
         image = capture_active_window() if active_window_only else capture_screen()
     except Exception as exc:
@@ -109,7 +112,7 @@ def ask_about_screen(question: str, active_window_only: bool = False) -> str:
         return "I grabbed your screen but couldn't process the image."
 
     messages = [
-        {"role": "system", "content": VISION_SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": [
             {"type": "text", "text": question or "What's on the screen right now?"},
             {"type": "image_url",
@@ -123,21 +126,28 @@ def ask_about_screen(question: str, active_window_only: bool = False) -> str:
             # block, which we must never speak.
             response = client.chat.completions.create(
                 model=config.VISION_MODEL, messages=messages,
-                temperature=0.3, max_tokens=200, reasoning_effort="none",
+                temperature=0.3, max_tokens=max_tokens, reasoning_effort="none",
             )
         except Exception:
             # A future model rotation might not accept reasoning_effort;
             # retry without it (and strip any think block below).
             response = client.chat.completions.create(
                 model=config.VISION_MODEL, messages=messages,
-                temperature=0.3, max_tokens=400,
+                temperature=0.3, max_tokens=max_tokens * 2,
             )
         answer = (response.choices[0].message.content or "")
-        answer = _THINK_RE.sub("", answer).strip()
-        return answer or "I looked, but I'm not sure what to make of it."
+        return _THINK_RE.sub("", answer).strip()
     except Exception as exc:
         print(f"[vision] model call failed: {exc!r}")
-        return "I couldn't reach my vision model to look at your screen."
+        return ""
+
+
+def ask_about_screen(question: str, active_window_only: bool = False) -> str:
+    """Capture the screen and return a concise spoken answer to `question`."""
+    answer = analyze_screen(question, VISION_SYSTEM_PROMPT, active_window_only)
+    if answer.startswith("I couldn't") or answer.startswith("I grabbed"):
+        return answer  # capture/encode error already phrased for speech
+    return answer or "I couldn't reach my vision model to look at your screen."
 
 
 def save_screenshot(path: str | None = None, active_window_only: bool = False) -> str | None:

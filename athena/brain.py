@@ -188,6 +188,28 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "guide_me",
+            "description": (
+                "Walk the user through an on-screen task step by step by "
+                "reading their screen - use for 'guide me through X', 'help me "
+                "do X', 'walk me through X'. Athena reads the screen and speaks "
+                "one instruction at a time; she does not click anything."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "goal": {
+                        "type": "string",
+                        "description": "What the user wants to accomplish.",
+                    }
+                },
+                "required": ["goal"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "open_dashboard",
             "description": ("Open the Athena dashboard - show the full dashboard "
                             "on screen (expands the floating orb into the HUD)."),

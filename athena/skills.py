@@ -132,6 +132,13 @@ def research_topic(topic: str) -> str:
     return research.research(topic)
 
 
+def guide_me(goal: str) -> str:
+    """Walk the user through an on-screen task step by step (guided mode)."""
+    from athena import guide  # lazy so vision/tts load only when used
+    print(f"[skills] guiding through: {goal!r}")
+    return guide.start_guide(goal)
+
+
 def see_screen(question: str, focus: str = "screen") -> str:
     """Look at the user's screen (or just the active window) and answer a
     question about what's shown. focus is 'screen' or 'window'."""
@@ -199,6 +206,7 @@ SKILLS = {
     "see_screen": see_screen,
     "look_up": look_up,
     "research": research_topic,
+    "guide_me": guide_me,
     "open_dashboard": open_dashboard,
     "close_dashboard": close_dashboard,
 }

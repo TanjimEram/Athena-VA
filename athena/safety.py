@@ -4,8 +4,19 @@ the user, 'blocked' is refused. Change a tool's risk level by moving its name
 between the sets below."""
 
 FREE = {"open_app", "open_website", "web_search", "get_system_info", "see_screen",
-        "look_up", "research", "guide_me", "open_dashboard", "close_dashboard"}
-CONFIRM = {"set_volume", "lock_screen"}
+        "look_up", "research", "guide_me", "open_dashboard", "close_dashboard",
+        # Reading is safe: these only look at documents and email.
+        "read_document", "find_document",
+        "list_recent_emails", "summarize_emails"}
+CONFIRM = {"set_volume", "lock_screen",
+           # These write something the user will see and have to undo.
+           "create_document", "write_to_document", "write_local_docx",
+           # draft_email cannot send, but it still puts a message in Gmail.
+           "draft_email",
+           # send_email is the only tool that leaves the machine. It is also
+           # in brain.NEVER_BATCHED (never runs inside a multi-step chain) and
+           # does its own recipient/subject read-back inside mail.py.
+           "send_email"}
 BLOCKED: set[str] = set()  # nothing blocked yet
 
 

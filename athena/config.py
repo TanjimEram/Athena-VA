@@ -19,6 +19,19 @@ SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 # the look_up/research skills say they can't reach the web instead of failing.
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 
+# Google (Docs + Gmail). Optional: without these the document and email
+# skills say they aren't connected instead of failing. These are the
+# "Desktop app" OAuth client credentials from the Google Cloud Console -
+# they are NOT an API key and must never be committed.
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
+# Where the signed-in token is cached (gitignored). Per-machine, like
+# settings.json - one file next to the project, not in the package.
+GOOGLE_TOKEN_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "google_token.json",
+)
+
 # Model names live here so swapping models is a one-line change.
 BRAIN_MODEL = "llama-3.3-70b-versatile"
 
@@ -56,8 +69,9 @@ ASSISTANT_NAME = "Athena"
 CAPABILITIES = (
     "open apps, open websites, search the web and read you the answer, set the "
     "system volume, lock the screen, report battery and system status, look at "
-    "your screen to answer questions about it, and guide you through on-screen "
-    "tasks step by step"
+    "your screen to answer questions about it, guide you through on-screen "
+    "tasks step by step, write documents for you in Google Docs or Word, and "
+    "read, summarize, draft and send your email"
 )
 BRAIN_TEMPERATURE = 0.6
 # Low on purpose: replies are spoken aloud, so a hard cap keeps her to a

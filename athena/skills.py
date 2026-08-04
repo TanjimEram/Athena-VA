@@ -139,6 +139,76 @@ def guide_me(goal: str) -> str:
     return guide.start_guide(goal)
 
 
+# --- documents (Google Docs, with a local Word fallback) ---
+# All lazy imports: the Google libraries are heavy and most turns never
+# touch them.
+
+def create_document(title: str) -> str:
+    """Create a new, empty Google Doc."""
+    from athena import documents
+    print(f"[skills] creating document: {title!r}")
+    return documents.create_document(title)
+
+
+def write_to_document(title: str, text: str, mode: str = "append") -> str:
+    """Write text the brain composed into a document, then open it."""
+    from athena import documents
+    print(f"[skills] writing {len(text.split())} words to {title!r} ({mode})")
+    return documents.write_to_document(title, text, mode)
+
+
+def find_document(title: str) -> str:
+    """Search the user's documents by name."""
+    from athena import documents
+    print(f"[skills] finding document: {title!r}")
+    return documents.find_document(title)
+
+
+def read_document(title: str) -> str:
+    """Read a document back aloud."""
+    from athena import documents
+    print(f"[skills] reading document: {title!r}")
+    return documents.read_document(title)
+
+
+def write_local_docx(title: str, text: str) -> str:
+    """Write a Word file to the Documents folder - the offline fallback."""
+    from athena import documents
+    print(f"[skills] writing local docx: {title!r}")
+    return documents.write_local_docx(title, text)
+
+
+# --- email (Gmail) ---
+
+def list_recent_emails(n: int = 10) -> str:
+    """Who emailed recently and about what - senders and subjects only."""
+    from athena import mail
+    print(f"[skills] listing {n} recent emails")
+    return mail.list_recent_emails(n)
+
+
+def summarize_emails(n: int = 10) -> str:
+    """Read the recent emails and summarize what they're about."""
+    from athena import mail
+    print(f"[skills] summarizing {n} recent emails")
+    return mail.summarize_emails(n)
+
+
+def draft_email(to: str, subject: str, body: str) -> str:
+    """Save a Gmail draft. This never sends."""
+    from athena import mail
+    print(f"[skills] drafting email to {to!r}")
+    return mail.draft_email(to, subject, body)
+
+
+def send_email(to: str, subject: str, body: str) -> str:
+    """Send an email. mail.send_email reads the recipient and subject back
+    and refuses to send without an explicit yes - see mail.py."""
+    from athena import mail
+    print(f"[skills] send_email requested for {to!r}")
+    return mail.send_email(to, subject, body)
+
+
 def see_screen(question: str, focus: str = "screen") -> str:
     """Look at the user's screen (or just the active window) and answer a
     question about what's shown. focus is 'screen' or 'window'."""
@@ -207,6 +277,15 @@ SKILLS = {
     "look_up": look_up,
     "research": research_topic,
     "guide_me": guide_me,
+    "create_document": create_document,
+    "write_to_document": write_to_document,
+    "find_document": find_document,
+    "read_document": read_document,
+    "write_local_docx": write_local_docx,
+    "list_recent_emails": list_recent_emails,
+    "summarize_emails": summarize_emails,
+    "draft_email": draft_email,
+    "send_email": send_email,
     "open_dashboard": open_dashboard,
     "close_dashboard": close_dashboard,
 }

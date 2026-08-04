@@ -395,6 +395,11 @@ def main() -> None:
     from athena import guide
     guide.set_io(speak_fn=speak,
                  listen_fn=lambda: hear(max_seconds=float(settings.get("followup_seconds", 6))))
+    # Sending email reads the recipient and subject back and waits for a yes,
+    # through the same card-or-voice confirm the chain uses. Without this,
+    # mail.send_email refuses to send and saves a draft instead.
+    from athena import mail
+    mail.set_confirm(_chain_confirm)
     ui.on_typed_input = _on_typed
     ui.on_confirm = _on_confirm_click
     # ui.on_orb_click stays default: click expands to the dashboard.

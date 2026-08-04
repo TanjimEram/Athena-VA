@@ -12,3 +12,6 @@ __pycache__/
 
 # Per-machine settings written by the settings dashboard
 settings.json
+
+# Google OAuth token (a live credential - grants access to Docs and Gmail)
+google_token.json

@@ -120,6 +120,12 @@ run_agent(user_text, history=None, on_step=None, confirm=None) -> dict
 
 run_confirmed(tool_name: str, args: dict) -> str
 # executes a confirm-level tool AFTER the user says yes; returns spoken result
+
+NEVER_BATCHED: set     # {"send_email"} - skipped if bundled with other calls
+SELF_CONFIRMING: set   # {"send_email"} - the skill asks in its own words
+CONFIRM_PHRASING: dict # short yes/no wording per tool; the generic phrasing
+                       # joins every argument, which would read a whole
+                       # document or email body aloud before writing it
 ```
 
 ### athena/safety.py — permission gate (DONE)
@@ -129,8 +135,20 @@ classify(tool_name: str) -> str        # 'free' | 'confirm' | 'blocked'
 confirm_needed(tool_name: str) -> bool
 ```
 
-Current policy — free: open_app, open_website, web_search, get_system_info;
-confirm: set_volume, lock_screen; blocked: none (unknown tools are blocked).
+Current policy — free: open_app, open_website, web_search, get_system_info,
+see_screen, look_up, research, guide_me, open/close_dashboard, read_document,
+find_document, list_recent_emails, summarize_emails (all read-only);
+confirm: set_volume, lock_screen, create_document, write_to_document,
+write_local_docx, draft_email, send_email; blocked: none (unknown tools are
+blocked).
+
+`send_email` carries two extra guards beyond its tier: it's in
+`brain.NEVER_BATCHED` so it can never run inside a multi-step chain, and it's
+in `brain.SELF_CONFIRMING` so the read-back question comes from `mail.py`
+(recipient + subject) rather than the generic one. That delegation cannot
+weaken the gate — `mail.send_email` refuses to send without an explicit yes
+regardless of what the safety layer did, including when
+`confirm_before_acting` is switched off in settings.
 
 ### athena/skills.py — actions (REAL, DONE)
 Real Windows implementations (app launch via PATH + ShellExecute, browser via
@@ -146,8 +164,17 @@ set_volume(level: int) -> str
 lock_screen() -> str
 get_system_info() -> str
 see_screen(question: str, focus="screen"|"window") -> str   # via vision.py
+create_document(title) / write_to_document(title, text, mode) /
+find_document(title) / read_document(title) / write_local_docx(title, text)
+list_recent_emails(n) / summarize_emails(n) /
+draft_email(to, subject, body) / send_email(to, subject, body)
 SKILLS: dict[str, callable]   # name -> function, used by brain to dispatch
 ```
+
+The document and email skills are thin wrappers that lazily import
+`documents.py` / `mail.py` — the Google libraries are heavy and most turns
+never touch them. The PROSE for a document or an email is composed by the
+brain and passed in as an argument; the skills only carry it.
 
 ### athena/vision.py — screen understanding (DONE)
 Captures the screen (or active window) with mss, downscales to
@@ -179,6 +206,97 @@ and are bounded so they don't hang the turn. Skills `look_up` / `research`
 (free tier) dispatch to them; the brain routes factual/"latest" questions to
 look_up, "research X"/"tell me about X" to research, and only "open a search"
 to web_search.
+
+### athena/google_auth.py — Google sign-in (DONE)
+Owns the whole OAuth2 desktop flow for Docs and Gmail, and nothing else.
+Client ID/secret come from `config.GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`
+and are assembled into an in-memory client config — there is no
+`client_secret.json` on disk. The sign-in is cached to
+`config.GOOGLE_TOKEN_FILE` (`google_token.json`, gitignored) and refreshed
+silently when it expires.
+
+`interactive` defaults to **False everywhere in the assistant loop**: the
+consent screen blocks on a local web server, which would hang a voice turn
+with nothing on screen to explain it. Only `google_auth_test.py` passes
+`interactive=True`. Skills that find no sign-in speak
+`not_connected_message()` instead of failing. Scopes are compared against the
+cached token on load, so adding a scope later gives a clear "sign in again"
+message rather than an error deep inside an API call.
+
+```python
+SCOPES: list[str]      # documents, drive.file, gmail.readonly, gmail.compose
+
+is_configured() -> bool                 # client id + secret present in .env
+get_credentials(interactive=False)      # -> Credentials | None
+get_service(api: str, version: str)     # -> API client | None, cached per pair
+check_connection(interactive=False) -> dict
+# {"ok", "detail", "account", "scopes", "drive", "gmail"} - really calls
+# Drive and Gmail, so an API switched off in the Cloud Console is caught
+not_connected_message() -> str          # the one shared "not signed in" line
+sign_out() -> str                       # delete the cached token
+```
+
+Verify with `python google_auth_test.py` (`--reset` to re-consent). While the
+Cloud project is in Testing mode Google expires the sign-in after 7 days.
+
+### athena/documents.py — writing documents (DONE)
+Google Docs through the API (never a driven browser: Docs renders to canvas,
+so there is no DOM to type into, and Google blocks automated sign-in). These
+functions only move text in and out — the PROSE always comes from the brain,
+which composes the text and hands it to `write_to_document`.
+
+A document is named by id or by title; anything not matching an id is looked
+up by name via Drive. The `drive.file` scope means Athena only ever sees
+documents SHE created. Ambiguous titles ask which one rather than guessing;
+the last document touched is remembered, so "add a line to it" works without
+repeating the title. After a successful write the doc opens with
+`webbrowser.open` (module flag `OPEN_IN_BROWSER`, which the test script turns
+off). `read_document` is capped at `MAX_SPOKEN_CHARS` because it's spoken.
+
+```python
+create_document(title) -> str
+write_to_document(doc_id_or_title, text, mode="append"|"replace") -> str
+find_document(title) -> str          # search by name, report the matches
+read_document(doc_id_or_title) -> str
+write_local_docx(title, text) -> str
+# offline fallback: a real .docx via python-docx, saved to the user's
+# Documents folder and opened with os.startfile - no internet, no Google
+```
+
+Verify with `python documents_test.py` (`--local` for the fallback only).
+
+### athena/mail.py — email (DONE)
+Gmail through the API. Reading and writing are deliberately kept apart:
+`draft_email` only ever creates a DRAFT sitting in Gmail, and `send_email` is
+the only function that can put a message on the wire.
+
+`send_email` will not fire on its own. It reads the recipient and subject
+back and waits for an explicit yes through the confirm hook main.py wires in
+with `set_confirm()` — the same yes/no the safety gate uses, so voice or a
+dashboard click both work. **With no hook wired it refuses to send and saves
+a draft instead**; same if the user says no, or if the confirm call itself
+raises. That gate lives INSIDE this module on purpose, so a send is still
+safe if it is ever called from somewhere that skipped `safety.py`. Bad
+recipients and empty bodies are refused before the gate is even reached.
+
+Summaries call Groq directly rather than through `brain.py`, so
+`skills -> mail -> brain -> skills` never becomes an import loop.
+
+```python
+set_confirm(confirm_fn=None) -> None    # main.py injects confirm(question)->bool
+
+list_recent_emails(n=10) -> str    # senders + subjects only, never contents
+summarize_emails(n=10) -> str      # fetches bodies, the LLM condenses them
+draft_email(to, subject, body) -> str   # saves a draft; NEVER sends
+send_email(to, subject, body) -> str    # gated; drafts instead of sending
+                                        # whenever it isn't explicitly approved
+```
+
+One recipient per message; a name instead of an address, or a comma-separated
+list, is refused with a spoken explanation rather than guessed at.
+
+Verify with `python mail_test.py` — it sends nothing by default and proves
+the gate holds. `--send-real` sends one mail to your own address.
 
 ### athena/memory.py — long-term memory (DONE)
 Supabase (free cloud Postgres) `interactions` table; the schema SQL is in

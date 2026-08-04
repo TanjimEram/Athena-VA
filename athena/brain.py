@@ -210,6 +210,186 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "create_document",
+            "description": (
+                "Create a new, empty document - 'make me a document called X', "
+                "'start a new doc'. To create a document AND put text in it, "
+                "call this first, then write_to_document."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string",
+                              "description": "What to call the document."},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_to_document",
+            "description": (
+                "Write text into a document - 'write X in my notes', 'add this "
+                "to that doc', 'put a paragraph about X in it'. YOU compose the "
+                "actual prose and pass it as `text`; this tool only stores it. "
+                "Write the full text the user asked for, properly worded."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": ("The document's title (or id). Use 'it' "
+                                        "for the document just worked on."),
+                    },
+                    "text": {
+                        "type": "string",
+                        "description": "The finished prose to write in.",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["append", "replace"],
+                        "description": ("'append' adds to the end (default), "
+                                        "'replace' overwrites everything."),
+                    },
+                },
+                "required": ["title", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_document",
+            "description": ("Search the user's documents by name - 'do I have a "
+                            "doc about X', 'find my notes'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string",
+                              "description": "All or part of the document name."},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_document",
+            "description": ("Read a document's contents back aloud - 'what's in "
+                            "my notes', 'read me that doc'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string",
+                              "description": "The document's title (or id)."},
+                },
+                "required": ["title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write_local_docx",
+            "description": (
+                "Write a Word file to the computer instead of Google Docs - use "
+                "when the user asks for a Word document or a local file, or "
+                "after a Google Docs attempt failed. YOU compose the prose."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string",
+                              "description": "What to call the file."},
+                    "text": {"type": "string",
+                             "description": "The finished prose to write in."},
+                },
+                "required": ["title", "text"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_recent_emails",
+            "description": ("List who emailed recently and about what - senders "
+                            "and subjects only. 'any new email', 'who emailed me'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "n": {"type": "integer",
+                          "description": "How many to list (default 10)."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "summarize_emails",
+            "description": ("Read the recent emails and summarize what they are "
+                            "actually about - 'what's in my inbox', 'catch me up "
+                            "on my email', 'anything important'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "n": {"type": "integer",
+                          "description": "How many to read (default 10)."},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "draft_email",
+            "description": (
+                "Write an email and save it as a DRAFT for the user to review. "
+                "This never sends. Prefer this whenever the user says 'write' or "
+                "'draft' an email. YOU compose the body text."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string",
+                           "description": "One full email address."},
+                    "subject": {"type": "string", "description": "The subject line."},
+                    "body": {"type": "string",
+                             "description": "The finished email text."},
+                },
+                "required": ["to", "subject", "body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "send_email",
+            "description": (
+                "Actually SEND an email. Only use when the user explicitly says "
+                "send - otherwise use draft_email. Never combine this with other "
+                "actions in one reply; it must be the only tool call you make."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "to": {"type": "string",
+                           "description": "One full email address."},
+                    "subject": {"type": "string", "description": "The subject line."},
+                    "body": {"type": "string",
+                             "description": "The finished email text."},
+                },
+                "required": ["to", "subject", "body"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "open_dashboard",
             "description": ("Open the Athena dashboard - show the full dashboard "
                             "on screen (expands the floating orb into the HUD)."),
@@ -573,6 +753,19 @@ AGENT_GUIDANCE = (
 )
 
 
+# Tools that must NEVER run as part of a multi-step chain. If the model
+# bundles one of these with other actions, it is skipped and the user is told
+# to ask for it on its own - so "email Bob and lock the screen" can never fire
+# an email off the back of a batch the user only half-heard.
+NEVER_BATCHED = {"send_email"}
+
+# Tools that ask for their own confirmation, in their own words. Still
+# confirm-tier: the asking is just delegated so the user isn't asked twice,
+# and so the question doesn't read an entire email body aloud. The delegated
+# gate is unconditional inside the skill, so this can't weaken it.
+SELF_CONFIRMING = {"send_email"}
+
+
 def run_agent(user_text: str, history: list | None = None,
               on_step=None, confirm=None) -> dict:
     """Fulfil a possibly multi-step request. The model may return several
@@ -612,8 +805,10 @@ def run_agent(user_text: str, history: list | None = None,
         messages.append(_assistant_tool_msg(message))
 
         new_calls = 0   # NEW (non-duplicate) actions this round
+        in_batch = len(message.tool_calls) > 1
         for call in message.tool_calls:
-            step, feedback, duplicate = _handle_call(call, confirm, declined, ran_sigs)
+            step, feedback, duplicate = _handle_call(call, confirm, declined,
+                                                     ran_sigs, in_batch)
             # A duplicate of an already-run action is fed back (so the model
             # stops repeating) but not re-executed, re-logged, or re-counted.
             if not duplicate:
@@ -809,7 +1004,40 @@ def _agent_chat(messages: list):
     return None, "Sorry, I couldn't work that one out. Could you rephrase it?"
 
 
-def _handle_call(call, confirm, declined: set, ran_sigs: dict) -> tuple[dict, str, bool]:
+# How to word the yes/no question for tools whose arguments are too long to
+# read out. The generic phrasing below joins every argument value, which for
+# a document or an email would speak the whole text aloud before writing it.
+CONFIRM_PHRASING = {
+    "create_document": lambda a: f"Create a document called {a.get('title', '')}",
+    "write_to_document": lambda a: (
+        f"{'Replace' if str(a.get('mode', '')).startswith('replace') else 'Add'} "
+        f"{len(str(a.get('text', '')).split())} words "
+        f"{'in' if str(a.get('mode', '')).startswith('replace') else 'to'} "
+        f"{a.get('title', 'that document')}"),
+    "write_local_docx": lambda a: (
+        f"Save a Word file called {a.get('title', '')} to your Documents"),
+    "draft_email": lambda a: (
+        f"Save a draft to {a.get('to', '')}"
+        + (f", about {a['subject']}" if a.get("subject") else "")),
+}
+
+
+def _confirm_question(tool: str, args: dict) -> str:
+    """The spoken yes/no question for one confirm-tier action."""
+    phrase = CONFIRM_PHRASING.get(tool)
+    if phrase is not None:
+        try:
+            return phrase(args).strip() + "? Yes or no."
+        except Exception:
+            pass                      # fall through to the generic wording
+    pretty = ", ".join(f"{v}" for v in args.values())
+    return (f"{tool.replace('_', ' ').capitalize()}"
+            + (f" to {pretty}" if pretty else "")
+            + "? Yes or no.")
+
+
+def _handle_call(call, confirm, declined: set, ran_sigs: dict,
+                 in_batch: bool = False) -> tuple[dict, str, bool]:
     """Classify one tool call, enforce its safety tier (asking `confirm` for
     confirm-tier steps), run it if allowed, and return (step, feedback,
     duplicate). `feedback` is what the model sees next: the real result for
@@ -843,18 +1071,23 @@ def _handle_call(call, confirm, declined: set, ran_sigs: dict) -> tuple[dict, st
         step["result"] = f"Not allowed: {tool} is off-limits."
         return step, NOT_DONE, False
 
+    # Refuse to run an irreversible tool that arrived bundled with others.
+    if in_batch and tool in NEVER_BATCHED:
+        step["status"] = "skipped"
+        step["result"] = ("I didn't do that as part of a multi-step request - "
+                          "ask me for it on its own.")
+        return step, NOT_DONE, False
+
     # Confirm-before-acting can be turned off in settings; then confirm-tier
     # actions run straight away (read at call time so the toggle is live).
     from athena import settings
-    if tier == "confirm" and settings.get("confirm_before_acting", True):
+    if (tier == "confirm" and tool not in SELF_CONFIRMING
+            and settings.get("confirm_before_acting", True)):
         if tool in declined:                     # already said no this turn
             step["status"] = "skipped"
             step["result"] = f"Skipped {tool.replace('_', ' ')} (already declined)."
             return step, NOT_DONE, True          # duplicate: don't re-log
-        pretty = ", ".join(f"{v}" for v in args.values())
-        question = (f"{tool.replace('_', ' ').capitalize()}"
-                    + (f" to {pretty}" if pretty else "")
-                    + "? Yes or no.")
+        question = _confirm_question(tool, args)
         approved = bool(confirm(question)) if confirm is not None else False
         if not approved:
             declined.add(tool)

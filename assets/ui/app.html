@@ -513,6 +513,16 @@
     r = row("Sleep phrases"); r.className = "srow col"; var sp = el("input"); sp.type = "text"; sp.value = (v.sleep_phrases || []).join(", "); sp.style.maxWidth = "100%"; sp.addEventListener("change", function () { save("sleep_phrases", sp.value.split(",").map(function (s) { return s.trim(); }).filter(Boolean)); }); r._ctl.style.width = "100%"; r._ctl.appendChild(sp); g.appendChild(r);
     body.appendChild(g);
 
+    // Guided mode
+    g = group("Guided mode");
+    var autoRow = row("Auto-advance delay");
+    function markWait(mode) { autoRow.style.opacity = mode === "auto" ? "1" : "0.45"; }
+    r = row("Advance"); r._ctl.appendChild(selectCtl(v.guide_wait_mode, ["manual", "auto"], function (x) { save("guide_wait_mode", x); markWait(x); })); g.appendChild(r);
+    autoRow._ctl.appendChild(rangeCtl(v.guide_auto_seconds, 2, 15, 1, "s", function (x) { save("guide_auto_seconds", x); })); g.appendChild(autoRow);
+    markWait(v.guide_wait_mode);
+    r = row("Max steps"); r._ctl.appendChild(rangeCtl(v.guide_max_steps, 4, 20, 1, "", function (x) { save("guide_max_steps", x); })); g.appendChild(r);
+    body.appendChild(g);
+
     // Skills
     g = group("Skills");
     (data.skills || []).forEach(function (s) {

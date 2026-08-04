@@ -13,9 +13,11 @@ voice (edge-tts, en-IE-EmilyNeural).
 ## Status
 
 Working end to end today: the always-on spoken loop (`python -m athena.main`),
-all individual test scripts, real skills, wake word, and the orb UI
-(standalone). Planned next: orb wired into the main loop, persistent memory
-(Supabase), a custom "Athena" wake word, PyInstaller packaging.
+the orb/dashboard UI wired into that loop, multi-step tool chaining, screen
+vision, live web research (Tavily), persistent memory (Supabase), a settings
+dashboard that applies most changes without a restart, and guided mode — she
+reads your screen and talks you through a task one step at a time. Planned
+next: a custom "Athena" wake word, PyInstaller packaging.
 
 ## Quickstart
 

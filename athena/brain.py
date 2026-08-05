@@ -387,6 +387,260 @@ TOOLS = [
             },
         },
     },
+    # --- spreadsheets. Ranges are A1 ("B3:D10"); rows and columns are plain
+    # numbers, 1-based and inclusive, exactly as the sheet labels them. ---
+    {
+        "type": "function",
+        "function": {
+            "name": "open_spreadsheet",
+            "description": ("Open a spreadsheet and remember it for later "
+                            "commands - 'open my budget sheet', or a pasted "
+                            "Google Sheets link. Do this before anything else."),
+            "parameters": {"type": "object", "properties": {
+                "name_or_url_or_id": {"type": "string",
+                                      "description": "Its name, link, or id."}},
+                "required": ["name_or_url_or_id"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "list_tabs",
+            "description": "List the tabs in the open spreadsheet.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "use_tab",
+            "description": ("Switch to a different tab of the open "
+                            "spreadsheet - 'go to the summary tab'."),
+            "parameters": {"type": "object", "properties": {
+                "name": {"type": "string", "description": "The tab's name."}},
+                "required": ["name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "describe_sheet",
+            "description": ("Describe the open sheet - its columns, how many "
+                            "rows, what tabs. Use for 'what's in this sheet'."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_range",
+            "description": "Read out what's in a range of cells, summarised.",
+            "parameters": {"type": "object", "properties": {
+                "a1_range": {"type": "string",
+                             "description": "A1 notation, e.g. 'A1:D10'."}},
+                "required": ["a1_range"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "count_matching",
+            "description": ("Count rows matching a condition - 'how many "
+                            "people scored over 80'. Reads only."),
+            "parameters": {"type": "object", "properties": {
+                "column": {"type": "string",
+                           "description": "Column header name or letter."},
+                "condition": {"type": "string",
+                              "description": ("equals, contains, starts with, "
+                                              "ends with, greater than, less "
+                                              "than, at least, at most, empty, "
+                                              "not empty")},
+                "value": {"type": "string", "description": "What to compare to."}},
+                "required": ["column", "condition"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sort_range",
+            "description": "Sort a range of cells by one column.",
+            "parameters": {"type": "object", "properties": {
+                "a1_range": {"type": "string", "description": "A1 range to sort."},
+                "column": {"type": "string",
+                           "description": "Column header name or letter."},
+                "order": {"type": "string", "enum": ["asc", "desc"]}},
+                "required": ["a1_range", "column"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "filter_rows",
+            "description": "Filter the tab to show only rows matching a condition.",
+            "parameters": {"type": "object", "properties": {
+                "column": {"type": "string", "description": "Header name or letter."},
+                "condition": {"type": "string",
+                              "description": "Same conditions as count_matching."},
+                "value": {"type": "string", "description": "What to compare to."}},
+                "required": ["column", "condition"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "clear_filter",
+            "description": "Remove the filter so every row shows again.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "color_range",
+            "description": "Fill cells with a background colour.",
+            "parameters": {"type": "object", "properties": {
+                "a1_range": {"type": "string", "description": "A1 range."},
+                "color_name": {"type": "string",
+                               "enum": ["red", "green", "yellow", "blue",
+                                        "orange", "grey"]}},
+                "required": ["a1_range", "color_name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "highlight_rows_where",
+            "description": ("Colour whole rows matching a condition - "
+                            "'highlight everyone who scored under 50 in red'."),
+            "parameters": {"type": "object", "properties": {
+                "column": {"type": "string", "description": "Header name or letter."},
+                "condition": {"type": "string",
+                              "description": "Same conditions as count_matching."},
+                "value": {"type": "string", "description": "What to compare to."},
+                "color_name": {"type": "string",
+                               "enum": ["red", "green", "yellow", "blue",
+                                        "orange", "grey"]}},
+                "required": ["column", "condition", "value", "color_name"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "add_formula",
+            "description": ("Put a formula in one cell - 'total column B in "
+                            "B10'. YOU write the formula."),
+            "parameters": {"type": "object", "properties": {
+                "cell": {"type": "string", "description": "One cell, e.g. 'B10'."},
+                "formula": {"type": "string",
+                            "description": "e.g. '=SUM(B2:B9)'."}},
+                "required": ["cell", "formula"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "insert_rows",
+            "description": ("Insert blank rows before a row. Row numbers are "
+                            "1-based, as the sheet labels them."),
+            "parameters": {"type": "object", "properties": {
+                "at_index": {"type": "integer", "description": "Insert before this row."},
+                "count": {"type": "integer", "description": "How many. Default 1."}},
+                "required": ["at_index"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "insert_columns",
+            "description": "Insert blank columns before a column (1-based).",
+            "parameters": {"type": "object", "properties": {
+                "at_index": {"type": "integer", "description": "Insert before this column."},
+                "count": {"type": "integer", "description": "How many. Default 1."}},
+                "required": ["at_index"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_rows",
+            "description": ("Delete rows. 1-based and INCLUSIVE: start 3 end 5 "
+                            "deletes rows 3, 4 and 5. Destructive - only when "
+                            "the user clearly asked to delete."),
+            "parameters": {"type": "object", "properties": {
+                "start": {"type": "integer", "description": "First row to delete."},
+                "end": {"type": "integer",
+                        "description": "Last row to delete. Omit for just one."}},
+                "required": ["start"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "delete_columns",
+            "description": ("Delete columns, 1-based and inclusive. "
+                            "Destructive - only when clearly asked."),
+            "parameters": {"type": "object", "properties": {
+                "start": {"type": "integer", "description": "First column."},
+                "end": {"type": "integer", "description": "Last column. Omit for one."}},
+                "required": ["start"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "move_rows",
+            "description": "Move rows somewhere else. All 1-based and inclusive.",
+            "parameters": {"type": "object", "properties": {
+                "from_start": {"type": "integer", "description": "First row to move."},
+                "from_end": {"type": "integer", "description": "Last row to move."},
+                "to_index": {"type": "integer", "description": "Put them before this row."}},
+                "required": ["from_start", "from_end", "to_index"]},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "freeze_header",
+            "description": "Freeze the top rows so they stay while scrolling.",
+            "parameters": {"type": "object", "properties": {
+                "rows": {"type": "integer", "description": "How many. Default 1, 0 unfreezes."}}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "autosize_columns",
+            "description": "Resize columns to fit their contents.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "undo_last_change",
+            "description": ("Undo the last change made to a spreadsheet - "
+                            "'undo that', 'put it back', 'no, revert'."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "apply_sheet_operation",
+            "description": (
+                "For a spreadsheet change no other tool covers - merging "
+                "cells, borders, conditional formatting, data validation, "
+                "find-and-replace. Pass the user's request in their own "
+                "words. Athena works out the change, reads it back, and only "
+                "acts on a yes. Prefer a specific tool when one fits."
+            ),
+            "parameters": {"type": "object", "properties": {
+                "natural_language_request": {
+                    "type": "string",
+                    "description": "What the user asked for, in plain words."}},
+                "required": ["natural_language_request"]},
+        },
+    },
     {
         "type": "function",
         "function": {
@@ -757,13 +1011,22 @@ AGENT_GUIDANCE = (
 # bundles one of these with other actions, it is skipped and the user is told
 # to ask for it on its own - so "email Bob and lock the screen" can never fire
 # an email off the back of a batch the user only half-heard.
-NEVER_BATCHED = {"send_email"}
+NEVER_BATCHED = {
+    "send_email",
+    # Every spreadsheet edit. A sheet edit bundled with other actions gets
+    # one blanket approval, and the user can't tell which part they said yes
+    # to - so these only ever run as a request of their own.
+    "sort_range", "filter_rows", "clear_filter", "color_range",
+    "highlight_rows_where", "add_formula", "insert_rows", "insert_columns",
+    "delete_rows", "delete_columns", "move_rows", "freeze_header",
+    "autosize_columns", "undo_last_change", "apply_sheet_operation",
+}
 
 # Tools that ask for their own confirmation, in their own words. Still
 # confirm-tier: the asking is just delegated so the user isn't asked twice,
 # and so the question doesn't read an entire email body aloud. The delegated
 # gate is unconditional inside the skill, so this can't weaken it.
-SELF_CONFIRMING = {"send_email"}
+SELF_CONFIRMING = {"send_email", "apply_sheet_operation"}
 
 
 def run_agent(user_text: str, history: list | None = None,
@@ -1019,7 +1282,53 @@ CONFIRM_PHRASING = {
     "draft_email": lambda a: (
         f"Save a draft to {a.get('to', '')}"
         + (f", about {a['subject']}" if a.get("subject") else "")),
+    # The two destructive sheet tools read back exactly what disappears.
+    "delete_rows": lambda a: _delete_readback("row", a),
+    "delete_columns": lambda a: _delete_readback("column", a),
+    "sort_range": lambda a: (
+        f"Sort {a.get('a1_range', 'that range')} by {a.get('column', '')}"),
+    "color_range": lambda a: (
+        f"Colour {a.get('a1_range', 'that range')} {a.get('color_name', '')}"),
+    "highlight_rows_where": lambda a: (
+        f"Highlight rows where {a.get('column', '')} {a.get('condition', '')} "
+        f"{a.get('value', '')} in {a.get('color_name', '')}"),
+    "add_formula": lambda a: (
+        f"Put the formula {a.get('formula', '')} in {a.get('cell', '')}"),
+    "insert_rows": lambda a: _insert_readback("row", a),
+    "insert_columns": lambda a: _insert_readback("column", a),
+    "freeze_header": lambda a: (
+        "Unfreeze the top rows" if int(a.get("rows", 1) or 0) == 0
+        else f"Freeze the top {a.get('rows', 1)} "
+             f"row{'' if int(a.get('rows', 1)) == 1 else 's'}"),
+    "autosize_columns": lambda a: "Resize the columns to fit",
+    "move_rows": lambda a: (
+        f"Move rows {a.get('from_start', '')} to {a.get('from_end', '')}, "
+        f"to row {a.get('to_index', '')}"),
+    "filter_rows": lambda a: (
+        f"Filter to rows where {a.get('column', '')} {a.get('condition', '')} "
+        f"{a.get('value', '')}"),
+    "undo_last_change": lambda a: "Undo the last change I made to the sheet",
 }
+
+
+def _insert_readback(word: str, args: dict) -> str:
+    """"Insert 2 rows at row 4" - spoken, so no "row(s)"."""
+    try:
+        count = max(1, int(args.get("count", 1) or 1))
+    except (TypeError, ValueError):
+        count = 1
+    plural = "" if count == 1 else "s"
+    return f"Insert {count} {word}{plural} at {word} {args.get('at_index', '')}"
+
+
+def _delete_readback(word: str, args: dict) -> str:
+    """Say precisely what a delete removes. This is the last thing the user
+    hears before rows disappear, so it names them rather than summarising."""
+    start = args.get("start", "")
+    end = args.get("end") or start
+    if str(start) == str(end):
+        return f"Delete {word} {start}"
+    return f"Delete {word}s {start} to {end}, that's everything in between"
 
 
 def _confirm_question(tool: str, args: dict) -> str:

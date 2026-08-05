@@ -142,6 +142,17 @@ confirm: set_volume, lock_screen, create_document, write_to_document,
 write_local_docx, draft_email, send_email; blocked: none (unknown tools are
 blocked).
 
+Spreadsheets — free: open_spreadsheet, list_tabs, use_tab, read_range,
+describe_sheet, count_matching. confirm: every mutating operation, including
+undo_last_change, plus delete_rows/delete_columns/apply_sheet_operation which
+read back exactly what will happen first.
+
+**Every mutating sheet tool is in `brain.NEVER_BATCHED`.** A sheet edit
+bundled with other actions would get one blanket approval covering things the
+user can't separate, so they only ever run as a request of their own. The
+read-only sheet tools stay batchable. `apply_sheet_operation` is also in
+`SELF_CONFIRMING` — `sheets.py` does its own plan read-back.
+
 `send_email` carries two extra guards beyond its tier: it's in
 `brain.NEVER_BATCHED` so it can never run inside a multi-step chain, and it's
 in `brain.SELF_CONFIRMING` so the read-back question comes from `mail.py`
@@ -171,9 +182,15 @@ draft_email(to, subject, body) / send_email(to, subject, body)
 SKILLS: dict[str, callable]   # name -> function, used by brain to dispatch
 ```
 
-The document and email skills are thin wrappers that lazily import
-`documents.py` / `mail.py` — the Google libraries are heavy and most turns
-never touch them. The PROSE for a document or an email is composed by the
+The document, email and spreadsheet skills are thin wrappers that lazily
+import `documents.py` / `mail.py` / `sheets.py` — the Google libraries are
+heavy and most turns never touch them.
+
+**Note on size:** there are now 42 registered tools, and their schemas are
+~3,900 tokens sent with *every* brain call — about a third of the Groq free
+tier's 12,000 tokens/minute before any conversation or sheet data. If tool
+definitions need trimming, the sheet tools are the obvious candidates to fold
+behind `apply_sheet_operation`. The PROSE for a document or an email is composed by the
 brain and passed in as an argument; the skills only carry it.
 
 ### athena/vision.py — screen understanding (DONE)
@@ -297,6 +314,185 @@ list, is refused with a spoken explanation rather than guessed at.
 
 Verify with `python mail_test.py` — it sends nothing by default and proves
 the gate holds. `--send-real` sends one mail to your own address.
+
+### athena/sheets.py — spreadsheets (Phase 1: READ-ONLY)
+Google Sheets through the API, never a driven browser. Athena keeps a
+**current spreadsheet and current tab** in module state, so you name the sheet
+once and then just give commands; every function falls back to that state.
+
+**A1 vs GridRange.** The API mixes two incompatible systems and this is where
+such code rots, so the rule is explicit: *every public function takes A1
+notation* (1-based, end **inclusive** — what a person says out loud).
+GridRange (0-based, end **exclusive**) exists only inside `_a1_to_grid`, which
+is the single place the off-by-one is converted. Nothing else does index
+arithmetic. Column letters are capped at three (`ZZZ` is the last real
+column), which is what stops `read_range("banana")` being taken as a column.
+
+**Scope consequence.** Opening by URL or id reaches any of the user's
+spreadsheets (the `spreadsheets` scope is not per-file). Opening by NAME goes
+through Drive, which under `drive.file` only sees files Athena created — so a
+spreadsheet the user made themselves must be opened by URL the first time.
+The not-found message says so.
+
+```python
+open_spreadsheet(name_or_url_or_id) -> str   # resolve, remember, describe
+list_tabs() -> str
+use_tab(name) -> str                         # switch the current tab
+read_range(a1_range) -> str                  # compact summary, never a dump
+describe_sheet() -> str                      # headers, row count, other tabs
+current() -> dict                            # {id, title, tab, sheet_id}
+
+# internal, the only range arithmetic in the module:
+_col_to_index("C") -> 2      /  _index_to_col(2) -> "C"
+_parse_a1("Tab!B3:D10") -> ("Tab", "B3:D10")
+_a1_to_grid(a1) -> GridRange /  _grid_to_a1(grid) -> str
+```
+
+Adding the `spreadsheets` scope invalidates an existing sign-in — run
+`python google_auth_test.py --reset` and approve all five permissions.
+Verify with `python sheets_test.py <spreadsheet-url-or-id>`; the target is
+required so a test can never wander into real data.
+
+**Undo (DONE).** The Sheets API has no undo — undo is a browser-editor
+feature and nothing done through the API goes near that stack, so sheets.py
+keeps its own. Before any mutating call, capture the affected range's values
+AND formatting; `undo_last_change` writes the captured state back via
+`updateCells` with `fields="userEnteredValue,userEnteredFormat"`. Cells the
+saved rows don't cover get cleared, which is what undoes anything the change
+added beyond the original extent. Stack depth 5, in memory, dies with the
+process — a safety net for "no, put that back", not a history.
+
+Ranges are `_bounded()` before snapshotting: `"B:B"` has no row bounds, and
+an unbounded restore range would let the API decide what to clear. A failed
+restore stays on the stack rather than being silently dropped. Undoing in a
+spreadsheet the user has since navigated away from names that spreadsheet.
+
+A snapshot may carry an `"inverse"` key — a list of batchUpdate requests to
+run instead of restoring cells. Structural edits (inserting or deleting rows)
+shift the grid, so writing old values back does **not** reverse them; those
+need an inverse request. Phase 3's insert/delete/move will use it.
+
+```python
+_snapshot(a1_range) -> dict | None   # None means DON'T mutate: no way back
+_push_undo(label, snapshot) -> bool  # False means nothing was recorded
+undo_last_change() -> str
+undo_depth() -> int
+_apply(requests, spreadsheet_id="") -> str | None   # batchUpdate, None = ok
+_bounded(grid) -> dict               # fill unbounded edges from the tab size
+```
+
+Verify with `python sheets_undo_test.py <url> [range]` — it writes to a
+far-off scratch block, proves values and background colours both come back,
+and restores that block to how it found it.
+
+**Named operations (DONE).** Each takes typed arguments, snapshots before
+mutating, and returns one short sentence.
+
+```python
+sort_range(a1_range, column, order="asc"|"desc") -> str
+filter_rows(column, condition, value="") -> str      # sets the basic filter
+clear_filter() -> str
+color_range(a1_range, color_name) -> str
+highlight_rows_where(column, condition, value, color_name) -> str
+add_formula(cell, formula) -> str                    # entered as if typed
+count_matching(column, condition, value="") -> str   # READ-ONLY
+insert_rows(at_index, count=1) / insert_columns(at_index, count=1) -> str
+delete_rows(start, end=0) / delete_columns(start, end=0) -> str
+move_rows(from_start, from_end, to_index) -> str
+freeze_header(rows=1) -> str
+autosize_columns() -> str
+```
+
+**Ranges take A1; rows and columns take spoken numbers** — 1-based and
+INCLUSIVE, so "delete rows 3 to 5" is the three rows labelled 3, 4, 5 in the
+sheet's own margin. `_dim_range` is the only place that converts, alongside
+`_a1_to_grid`.
+
+`column` accepts a header name ("Score"), a column letter ("C"), or a spoken
+number ("2"). **Header names win over letters** — someone saying "sort by C"
+almost certainly means a column headed C if one exists.
+
+`CONDITIONS` maps each condition to both a Sheets `ConditionType` (for the
+basic filter) and a local predicate (for `count_matching` and
+`highlight_rows_where`). `CONDITION_ALIASES` absorbs the many ways a person
+says the same thing ("is", "=", "more than", "above", "is blank"). A number
+comparison against text is False, not an error. `COLORS` is six named
+shades as RGB floats, plus aliases; users speak colour names, never hex.
+
+**`_mutate(label, snapshot, requests, success)` is the shape every mutating
+function takes** and the place the undo invariant is enforced: if
+`_push_undo` returns False nothing is attempted at all, and if the change
+fails the undo entry is popped again — a phantom entry would make the next
+undo restore something that was never changed.
+
+Which ops need an inverse rather than a cell snapshot: filter/clear_filter (a
+filter isn't cell data), insert/delete/move (they shift the grid),
+freeze_header and autosize_columns (sheet and column properties). `delete_*`
+captures the doomed cells first and its inverse is *insert then write back*;
+it refuses to delete at all if that capture fails.
+
+Verify with `python sheets_ops_test.py <url>` — builds its own table in a
+far-off scratch block, runs and undoes every operation, restores the block.
+
+**The escape hatch (DONE).** `apply_sheet_operation(natural_language_request)`
+for the unusual request no named operation covers. The model writes the
+batchUpdate body; **none of it is trusted.**
+
+```python
+set_confirm(confirm_fn=None) -> None      # main.py injects confirm(q) -> bool
+apply_sheet_operation(natural_language_request) -> str
+```
+
+The order is: generate → validate → describe → confirm → snapshot → apply.
+
+*Validation* refuses anything that isn't a list of single-key objects whose
+keys are in `KNOWN_REQUEST_TYPES` (the real batchUpdate types — an invented
+key means the model made something up, and inventions don't run), more than
+`MAX_GENERATED_REQUESTS`, any `spreadsheetId`/`destinationSpreadsheetId`
+anywhere in the tree that isn't the current file, or any `sheetId` that isn't
+a tab of the current file. The scan walks the whole nested structure, so a
+buried key can't slip past.
+
+*Description* is generated **from the validated JSON, not from anything the
+model said about it** — that matters, because the sentence the user approves
+has to describe what will actually run. Requests in `STRUCTURAL_TYPES` add a
+spoken warning that the undo will only be partial, since a cell snapshot
+can't reverse a shape change.
+
+*Confirmation* goes through `set_confirm`, like `mail.send_email`. **With no
+hook wired it states the plan and does nothing**; a "no", or a confirm call
+that raises, leaves the sheet alone. Only then is the whole used tab
+snapshotted and the body applied through `_mutate`.
+
+Verify with `python sheets_hatch_test.py <url>` — a dry run that answers no
+to everything and prints each generated body and its description, so the
+descriptions can be read against the requests. `--execute` runs one operation
+for real in a scratch block and undoes it.
+
+**Provider routing (DONE).** `apply_sheet_operation` is the only place in
+sheets.py that uses a model at all; everything else is plain API calls. That
+one call is token-heavy (it carries the sheet's shape and headers), so it can
+be moved off Groq's 12,000-tokens-per-minute free tier:
+
+```python
+_sheets_provider() -> str      # settings["sheets_provider"], read at call time
+_ask_model(system, user, max_tokens=900) -> (text, error)
+_ask_gemini(...) / _ask_groq(...)
+```
+
+Set `SHEETS_PROVIDER=gemini` and `GEMINI_API_KEY` in `.env` (or flip
+`sheets_provider` in settings, which is read at call time so it needs no
+restart). **The routing lives at this call site — `brain.py` is deliberately
+untouched** and the voice loop stays on Groq.
+
+Gemini is reached by plain REST over `urllib`; one call site doesn't justify
+another dependency, and the key goes in the `x-goog-api-key` header rather
+than the URL. **Any Gemini failure — no key, bad key, HTTP error, timeout,
+unusable response — falls back to Groq with a printed reason**, so switching
+providers can never leave the feature broken.
+
+Verify with `python sheets_provider_test.py` (add a URL to also generate a
+real body on each provider). Writes nothing.
 
 ### athena/memory.py — long-term memory (DONE)
 Supabase (free cloud Postgres) `interactions` table; the schema SQL is in

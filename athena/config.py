@@ -23,6 +23,16 @@ TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 # skills say they aren't connected instead of failing. These are the
 # "Desktop app" OAuth client credentials from the Google Cloud Console -
 # they are NOT an API key and must never be committed.
+# Gemini. Used ONLY for spreadsheet reasoning, and only when
+# SHEETS_PROVIDER is "gemini" - everything else stays on Groq. Sheet data is
+# token-heavy and Groq's free tier caps at 12,000 tokens a minute, so moving
+# just this one call off Groq keeps the voice loop's budget intact.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = "gemini-2.0-flash"
+# "groq" (default) or "gemini". Falls back to Groq if Gemini isn't usable,
+# so setting this can never leave the sheets feature broken.
+SHEETS_PROVIDER = os.getenv("SHEETS_PROVIDER", "groq")
+
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # Where the signed-in token is cached (gitignored). Per-machine, like
@@ -70,8 +80,10 @@ CAPABILITIES = (
     "open apps, open websites, search the web and read you the answer, set the "
     "system volume, lock the screen, report battery and system status, look at "
     "your screen to answer questions about it, guide you through on-screen "
-    "tasks step by step, write documents for you in Google Docs or Word, and "
-    "read, summarize, draft and send your email"
+    "tasks step by step, write documents for you in Google Docs or Word, "
+    "read, summarize, draft and send your email, and work on your Google "
+    "Sheets - sorting, filtering, colouring, formulas, adding and removing "
+    "rows, with an undo"
 )
 BRAIN_TEMPERATURE = 0.6
 # Low on purpose: replies are spoken aloud, so a hard cap keeps her to a

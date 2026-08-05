@@ -7,7 +7,10 @@ FREE = {"open_app", "open_website", "web_search", "get_system_info", "see_screen
         "look_up", "research", "guide_me", "open_dashboard", "close_dashboard",
         # Reading is safe: these only look at documents and email.
         "read_document", "find_document",
-        "list_recent_emails", "summarize_emails"}
+        "list_recent_emails", "summarize_emails",
+        # Spreadsheets: looking, not touching. use_tab only moves a pointer.
+        "open_spreadsheet", "list_tabs", "use_tab", "read_range",
+        "describe_sheet", "count_matching"}
 CONFIRM = {"set_volume", "lock_screen",
            # These write something the user will see and have to undo.
            "create_document", "write_to_document", "write_local_docx",
@@ -16,7 +19,18 @@ CONFIRM = {"set_volume", "lock_screen",
            # send_email is the only tool that leaves the machine. It is also
            # in brain.NEVER_BATCHED (never runs inside a multi-step chain) and
            # does its own recipient/subject read-back inside mail.py.
-           "send_email"}
+           "send_email",
+           # Every spreadsheet edit. All of these are also in
+           # brain.NEVER_BATCHED, so a destructive edit can never ride along
+           # inside a chain the user approved for something else.
+           "sort_range", "filter_rows", "clear_filter", "color_range",
+           "highlight_rows_where", "add_formula",
+           "insert_rows", "insert_columns", "move_rows",
+           "freeze_header", "autosize_columns", "undo_last_change",
+           # These three read their plan back before doing anything:
+           # delete_* through brain.CONFIRM_PHRASING, apply_sheet_operation
+           # inside sheets.py (so it's in brain.SELF_CONFIRMING too).
+           "delete_rows", "delete_columns", "apply_sheet_operation"}
 BLOCKED: set[str] = set()  # nothing blocked yet
 
 

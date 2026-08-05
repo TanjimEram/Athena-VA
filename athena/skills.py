@@ -209,6 +209,129 @@ def send_email(to: str, subject: str, body: str) -> str:
     return mail.send_email(to, subject, body)
 
 
+# --- spreadsheets (Google Sheets) ---
+# Lazy imports again: sheets.py pulls in the Google client, and most turns
+# never touch a spreadsheet.
+
+def open_spreadsheet(name_or_url_or_id: str) -> str:
+    """Point Athena at a spreadsheet and remember it for later commands."""
+    from athena import sheets
+    print(f"[skills] opening spreadsheet: {name_or_url_or_id!r}")
+    return sheets.open_spreadsheet(name_or_url_or_id)
+
+
+def list_tabs() -> str:
+    from athena import sheets
+    return sheets.list_tabs()
+
+
+def use_tab(name: str) -> str:
+    from athena import sheets
+    print(f"[skills] switching to tab: {name!r}")
+    return sheets.use_tab(name)
+
+
+def read_range(a1_range: str) -> str:
+    from athena import sheets
+    print(f"[skills] reading range: {a1_range!r}")
+    return sheets.read_range(a1_range)
+
+
+def describe_sheet() -> str:
+    from athena import sheets
+    return sheets.describe_sheet()
+
+
+def count_matching(column: str, condition: str, value: str = "") -> str:
+    from athena import sheets
+    return sheets.count_matching(column, condition, value)
+
+
+def sort_range(a1_range: str, column: str, order: str = "asc") -> str:
+    from athena import sheets
+    print(f"[skills] sorting {a1_range!r} by {column!r} {order}")
+    return sheets.sort_range(a1_range, column, order)
+
+
+def filter_rows(column: str, condition: str, value: str = "") -> str:
+    from athena import sheets
+    return sheets.filter_rows(column, condition, value)
+
+
+def clear_filter() -> str:
+    from athena import sheets
+    return sheets.clear_filter()
+
+
+def color_range(a1_range: str, color_name: str) -> str:
+    from athena import sheets
+    return sheets.color_range(a1_range, color_name)
+
+
+def highlight_rows_where(column: str, condition: str, value: str,
+                         color_name: str) -> str:
+    from athena import sheets
+    return sheets.highlight_rows_where(column, condition, value, color_name)
+
+
+def add_formula(cell: str, formula: str) -> str:
+    from athena import sheets
+    print(f"[skills] formula into {cell!r}: {formula!r}")
+    return sheets.add_formula(cell, formula)
+
+
+def insert_rows(at_index: int, count: int = 1) -> str:
+    from athena import sheets
+    return sheets.insert_rows(at_index, count)
+
+
+def insert_columns(at_index: int, count: int = 1) -> str:
+    from athena import sheets
+    return sheets.insert_columns(at_index, count)
+
+
+def delete_rows(start: int, end: int = 0) -> str:
+    from athena import sheets
+    print(f"[skills] deleting rows {start} to {end or start}")
+    return sheets.delete_rows(start, end)
+
+
+def delete_columns(start: int, end: int = 0) -> str:
+    from athena import sheets
+    print(f"[skills] deleting columns {start} to {end or start}")
+    return sheets.delete_columns(start, end)
+
+
+def move_rows(from_start: int, from_end: int, to_index: int) -> str:
+    from athena import sheets
+    return sheets.move_rows(from_start, from_end, to_index)
+
+
+def freeze_header(rows: int = 1) -> str:
+    from athena import sheets
+    return sheets.freeze_header(rows)
+
+
+def autosize_columns() -> str:
+    from athena import sheets
+    return sheets.autosize_columns()
+
+
+def undo_last_change() -> str:
+    """Put back the last change Athena made to a spreadsheet."""
+    from athena import sheets
+    print("[skills] undoing the last sheet change")
+    return sheets.undo_last_change()
+
+
+def apply_sheet_operation(natural_language_request: str) -> str:
+    """The escape hatch: sheets.py reads its plan back and refuses to run
+    without an explicit yes - see sheets.apply_sheet_operation."""
+    from athena import sheets
+    print(f"[skills] generic sheet operation: {natural_language_request!r}")
+    return sheets.apply_sheet_operation(natural_language_request)
+
+
 def see_screen(question: str, focus: str = "screen") -> str:
     """Look at the user's screen (or just the active window) and answer a
     question about what's shown. focus is 'screen' or 'window'."""
@@ -286,6 +409,27 @@ SKILLS = {
     "summarize_emails": summarize_emails,
     "draft_email": draft_email,
     "send_email": send_email,
+    "open_spreadsheet": open_spreadsheet,
+    "list_tabs": list_tabs,
+    "use_tab": use_tab,
+    "read_range": read_range,
+    "describe_sheet": describe_sheet,
+    "count_matching": count_matching,
+    "sort_range": sort_range,
+    "filter_rows": filter_rows,
+    "clear_filter": clear_filter,
+    "color_range": color_range,
+    "highlight_rows_where": highlight_rows_where,
+    "add_formula": add_formula,
+    "insert_rows": insert_rows,
+    "insert_columns": insert_columns,
+    "delete_rows": delete_rows,
+    "delete_columns": delete_columns,
+    "move_rows": move_rows,
+    "freeze_header": freeze_header,
+    "autosize_columns": autosize_columns,
+    "undo_last_change": undo_last_change,
+    "apply_sheet_operation": apply_sheet_operation,
     "open_dashboard": open_dashboard,
     "close_dashboard": close_dashboard,
 }

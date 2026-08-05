@@ -32,6 +32,9 @@ DEFAULTS = {
     # --- Brain ---
     "brain_provider": "groq",
     "brain_model": config.BRAIN_MODEL,
+    # Spreadsheet reasoning only - see config.SHEETS_PROVIDER. Read at call
+    # time, so switching it applies to the next request with no restart.
+    "sheets_provider": config.SHEETS_PROVIDER,
     "brain_max_tokens": config.BRAIN_MAX_TOKENS,
     "personality": ("calm, warm, and intelligent, with a composed presence "
                     "like FRIDAY from Iron Man"),

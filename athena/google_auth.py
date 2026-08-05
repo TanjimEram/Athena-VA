@@ -28,6 +28,11 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive.file",
     "https://www.googleapis.com/auth/gmail.readonly",
     "https://www.googleapis.com/auth/gmail.compose",
+    # Full spreadsheets access - unlike drive.file this reaches any of the
+    # user's sheets, which is what lets us open one by URL. There is no
+    # "list spreadsheets" call in the Sheets API though, so finding one by
+    # NAME still goes through Drive and so still only sees our own files.
+    "https://www.googleapis.com/auth/spreadsheets",
 ]
 
 _creds = None
@@ -56,12 +61,28 @@ def _client_config() -> dict:
     }
 
 
-def _scopes_match(creds) -> bool:
-    """True if the cached token covers everything in SCOPES. A token saved
-    before a new scope was added still LOOKS valid but fails deep inside an
-    API call with a confusing error, so we catch it here instead."""
-    granted = set(getattr(creds, "scopes", None) or [])
-    return set(SCOPES).issubset(granted)
+def granted_scopes() -> list:
+    """What the saved sign-in ACTUALLY covers, straight from the token file.
+
+    Read it from the file, never from a Credentials object: passing SCOPES to
+    from_authorized_user_file overwrites creds.scopes with what we ASKED for,
+    so the object always claims to have everything and can never reveal a
+    mismatch."""
+    path = config.GOOGLE_TOKEN_FILE
+    if not os.path.exists(path):
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return list(json.load(fh).get("scopes") or [])
+    except Exception as exc:
+        print(f"[google_auth] couldn't read the saved sign-in: {exc}")
+        return []
+
+
+def missing_scopes() -> list:
+    """Scopes in SCOPES that the saved sign-in doesn't cover."""
+    granted = set(granted_scopes())
+    return [scope for scope in SCOPES if scope not in granted]
 
 
 def _load_cached():
@@ -69,17 +90,18 @@ def _load_cached():
     path = config.GOOGLE_TOKEN_FILE
     if not os.path.exists(path):
         return None
+    # A token saved before a new scope was added still LOOKS valid but fails
+    # deep inside an API call with a confusing error - catch it here instead.
+    if missing_scopes():
+        print("[google_auth] saved sign-in is missing newer permissions - "
+              "run google_auth_test.py --reset to sign in again")
+        return None
     try:
         from google.oauth2.credentials import Credentials
-        creds = Credentials.from_authorized_user_file(path, SCOPES)
+        return Credentials.from_authorized_user_file(path, SCOPES)
     except Exception as exc:
         print(f"[google_auth] couldn't read the saved sign-in: {exc}")
         return None
-    if not _scopes_match(creds):
-        print("[google_auth] saved sign-in is missing newer permissions - "
-              "run google_auth_test.py to sign in again")
-        return None
-    return creds
 
 
 def _save(creds) -> None:
@@ -189,10 +211,17 @@ def check_connection(interactive: bool = False) -> dict:
 
     creds = get_credentials(interactive=interactive)
     if creds is None:
-        result["detail"] = ("not signed in - run this with interactive=True "
-                            "(python google_auth_test.py) to sign in")
+        missing = missing_scopes()
+        if missing and granted_scopes():
+            result["detail"] = (f"the saved sign-in is missing {len(missing)} "
+                                "newer permission(s) - sign in again with "
+                                "python google_auth_test.py --reset")
+        else:
+            result["detail"] = ("not signed in - run this with interactive=True "
+                                "(python google_auth_test.py) to sign in")
         return result
-    result["scopes"] = list(getattr(creds, "scopes", None) or [])
+    # Report what was really granted, not what we asked for.
+    result["scopes"] = granted_scopes()
 
     try:
         drive = get_service("drive", "v3")

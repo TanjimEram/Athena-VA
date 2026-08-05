@@ -400,6 +400,10 @@ def main() -> None:
     # mail.send_email refuses to send and saves a draft instead.
     from athena import mail
     mail.set_confirm(_chain_confirm)
+    # Same for the generic spreadsheet operation: it reads its plan back and
+    # waits for a yes. Without this it states the plan and does nothing.
+    from athena import sheets
+    sheets.set_confirm(_chain_confirm)
     ui.on_typed_input = _on_typed
     ui.on_confirm = _on_confirm_click
     # ui.on_orb_click stays default: click expands to the dashboard.

@@ -21,11 +21,30 @@ def check(label: str, ok: bool, detail: str = "") -> None:
     print(line.encode("ascii", "backslashreplace").decode("ascii"))
 
 
+class FakeRaw:
+    """brain._chat reads .headers for the usage meter and .parse() for the
+    completion, so the stub has to offer both."""
+    headers = {"x-ratelimit-limit-tokens": "12000",
+               "x-ratelimit-remaining-tokens": "11000"}
+
+    def __init__(self, response):
+        self._response = response
+
+    def parse(self):
+        return self._response
+
+
 class FakeCompletions:
     def create(self, **kwargs):
         sent.append(kwargs)
         msg = type("M", (), {"content": "Mm.", "tool_calls": None})()
         return type("R", (), {"choices": [type("C", (), {"message": msg})()]})()
+
+    @property
+    def with_raw_response(self):
+        outer = self
+        return type("W", (), {
+            "create": lambda _s, **kw: FakeRaw(outer.create(**kw))})()
 
 
 class FakeClient:

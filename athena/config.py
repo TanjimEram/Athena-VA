@@ -39,6 +39,14 @@ SHEETS_PROVIDER = os.getenv("SHEETS_PROVIDER", "groq")
 AGENTS_ENABLED = os.getenv("AGENTS_ENABLED", "").strip().lower() in (
     "1", "true", "yes", "on")
 
+# Speak a warning when the API budget runs low. OFF by default: the meter on
+# the dashboard is silent and always available, and a voice that interrupts
+# to talk about itself is worse than one that doesn't.
+USAGE_VOICE_ALERTS = os.getenv("USAGE_VOICE_ALERTS", "").strip().lower() in (
+    "1", "true", "yes", "on")
+# Fraction of the per-minute token budget below which she mentions it.
+USAGE_WARN_AT = 0.25
+
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # Where the signed-in token is cached (gitignored). Per-machine, like

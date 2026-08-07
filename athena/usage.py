@@ -210,8 +210,59 @@ def snapshot() -> dict:
                 "session_tokens": 0, "turns": 0, "stale_s": None}
 
 
+# Thresholds already spoken this session, so a warning is said once and not
+# every three seconds. Cleared when the window refills - see pending_alert.
+_fired: set = set()
+
+
+def pending_alert() -> str | None:
+    """A sentence to say about the budget, or None - which is almost always.
+
+    Says a given thing ONCE. The low-budget warning re-arms only after the
+    window has actually refilled past the threshold, so a minute spent
+    hovering near the line doesn't produce a running commentary. The caller
+    decides when it's polite to speak; this only decides whether there's
+    anything worth saying."""
+    try:
+        state = snapshot()
+
+        if state["throttled"] and state["wait_s"]:
+            if "throttled" not in _fired:
+                _fired.add("throttled")
+                seconds = max(1, int(round(state["wait_s"])))
+                return (f"I need about {seconds} second"
+                        f"{'s' if seconds != 1 else ''} before the next one.")
+            return None
+        _fired.discard("throttled")     # re-arms for the next throttle
+
+        pct = state["pct_tokens"]
+        if pct is None:
+            return None
+        if pct < config_warn_pct():
+            if "low" not in _fired:
+                _fired.add("low")
+                return ("Heads up, I'm at about a quarter of my token budget.")
+            return None
+        # Refilled past the line: allow it to be said again later.
+        _fired.discard("low")
+        return None
+    except Exception as exc:
+        print(f"[usage] alert check failed: {exc!r}")
+        return None
+
+
+def config_warn_pct() -> float:
+    """The warning threshold as a percentage, read at call time."""
+    try:
+        from athena import config
+        return float(config.USAGE_WARN_AT) * 100.0
+    except Exception:
+        return 25.0
+
+
 def reset() -> None:
     """Forget everything. Used between runs and by the demo script."""
+    _fired.clear()
     with _lock:
         _state.update({
             "tokens_left": None, "tokens_cap": None, "tokens_reset_at": None,

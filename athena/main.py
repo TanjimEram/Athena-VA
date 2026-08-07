@@ -255,6 +255,21 @@ def _do_turn(user_text: str) -> None:
         iter([reply]), on_level=ui.set_amplitude, on_sentence=_on_sentence
     )
     ui.set_amplitude(0)
+
+    # Budget warning, spoken only AFTER the reply has finished - speak_stream
+    # has returned by here, so this can never cut across her own sentence.
+    # Off unless config.USAGE_VOICE_ALERTS; the dashboard meter is the silent
+    # default. pending_alert() says a given thing once, not every turn.
+    if config.USAGE_VOICE_ALERTS:
+        try:
+            from athena import usage
+            alert = usage.pending_alert()
+            if alert:
+                ui.add_log(alert, "confirm")
+                speak(alert)
+        except Exception as exc:
+            print(f"[main] usage alert failed: {exc!r}")
+
     if ttfa_ms is not None:
         total_ms = (speak_started - turn_started) * 1000 + ttfa_ms
         print(f"[latency] first audio in {total_ms:.0f} ms "

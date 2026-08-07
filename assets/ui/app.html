@@ -103,6 +103,21 @@
   #hud-state { color: var(--accent); }
   #minbtn { background: none; border: 1px solid var(--line); color: var(--dim); font: inherit; width: 24px; height: 20px; line-height: 1; cursor: pointer; }
   #minbtn:hover { color: var(--accent); border-color: var(--line2); }
+  /* ---- session counters: small, corner, never competes with the log ---- */
+  #counters {
+    position: absolute; right: 12px; bottom: 10px; z-index: 5;
+    display: flex; gap: 18px; pointer-events: none;
+  }
+  #counters .ctr { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  #counters .num {
+    font-size: 19px; line-height: 1; color: var(--accent);
+    font-variant-numeric: tabular-nums; transition: transform 0.18s ease;
+  }
+  #counters .num.bump { transform: scale(1.35); }
+  #counters .cap {
+    font-size: 8px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--dim);
+  }
+
   /* ---- boot sequence: a cover over the dashboard that always lifts ---- */
   #boot {
     position: fixed; inset: 0; z-index: 900; background: var(--bg);
@@ -369,6 +384,11 @@
         </div>
         <div id="pill">Awaiting</div>
         <canvas id="wave" width="300" height="44"></canvas>
+        <div id="counters">
+          <div class="ctr"><span class="num" id="ctr-turns">0</span><span class="cap">turns</span></div>
+          <div class="ctr"><span class="num" id="ctr-tools">0</span><span class="cap">tools</span></div>
+          <div class="ctr"><span class="num" id="ctr-uptime">0:00</span><span class="cap">uptime</span></div>
+        </div>
         <div id="confirm" class="cornered">
           <div class="label">Confirmation required</div>
           <div id="confirm-q"></div>
@@ -442,6 +462,49 @@
     document.body.classList.toggle("dock-left", side === "left");
     document.body.classList.toggle("dock-right", side !== "left");
   };
+
+  /* ---- session counters ----------------------------------------------
+     Counted here from the events already arriving. Resets on page load,
+     which is fine - it's a session readout, not a ledger. */
+  var COUNTERS = (function () {
+    var turns = 0, tools = 0, startedAt = Date.now();
+    /* A tool-log line looks like "open_app(name=notepad) - ran: ...".
+       Other things go through add_log too (the confirm card, the agent
+       switch), and counting those as tools would inflate the number. */
+    var TOOL_SHAPE = /^[a-z_][a-z0-9_]*\(/i;
+
+    function bump(id, value) {
+      try {
+        var el = document.getElementById(id);
+        if (!el) { return; }
+        el.textContent = value;
+        el.classList.add("bump");
+        setTimeout(function () { el.classList.remove("bump"); }, 190);
+      } catch (err) { console.warn("[counters] bump failed", err); }
+    }
+    function clock() {
+      try {
+        var s = Math.floor((Date.now() - startedAt) / 1000);
+        var h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+        var text = h > 0
+          ? h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0")
+          : m + ":" + String(sec).padStart(2, "0");
+        var el = document.getElementById("ctr-uptime");
+        if (el) { el.textContent = text; }
+      } catch (err) { /* a stopped clock must not stop anything else */ }
+    }
+    setInterval(clock, 1000);
+    return {
+      turn: function () { try { turns++; bump("ctr-turns", turns); } catch (err) {} },
+      maybeTool: function (text) {
+        try {
+          if (TOOL_SHAPE.test(String(text || "").trim())) {
+            tools++; bump("ctr-tools", tools);
+          }
+        } catch (err) { console.warn("[counters] tool count failed", err); }
+      }
+    };
+  })();
 
   /* ---- boot sequence -------------------------------------------------
      A cover over the dashboard that reveals four checks then lifts. It uses
@@ -645,10 +708,13 @@
     box.scrollTop = box.scrollHeight;
     /* A tool log line means a tool just ran - that's the ACT stage. */
     try { PIPELINE.hit("act"); } catch (err) { console.warn("[pipeline] log hook failed", err); }
+    try { COUNTERS.maybeTool(text); } catch (err) { console.warn("[counters] log hook failed", err); }
   };
   window.addTranscript = function (who, text, instant) {
     var box = document.getElementById("chat");
     var isA = String(who).toLowerCase().indexOf("athena") === 0, last = box.lastElementChild, msg;
+    /* One turn per thing the USER said - Athena's reply is the same turn. */
+    try { if (!isA) { COUNTERS.turn(); } } catch (err) { console.warn("[counters] turn hook failed", err); }
     if (last && last.classList.contains("msg") && last.classList.contains("athena") === isA) { msg = last; }
     else { msg = document.createElement("div"); msg.className = "msg" + (isA ? " athena" : ""); msg.innerHTML = '<div class="who label">' + (isA ? "Athena" : "You") + "</div>"; box.appendChild(msg); }
     var span = document.createElement("div"); span.className = "text"; msg.appendChild(span);

@@ -83,6 +83,45 @@ def to_base64_jpeg(image: Image.Image, max_edge: int = config.VISION_MAX_EDGE) -
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
+# Longest edge of the thumbnail sent to the dashboard. Small on purpose:
+# this travels to the UI as a base64 data URI through evaluate_js, and the
+# full-size image we send to the model would be hundreds of kilobytes.
+THUMBNAIL_MAX_EDGE = 360
+THUMBNAIL_QUALITY = 62
+
+# main.py injects a function here so the dashboard can show what Athena just
+# looked at. Nothing else changes if it's absent - vision works exactly the
+# same headless or in tests.
+_thumbnail_sink = None
+
+
+def set_thumbnail_sink(sink_fn=None) -> None:
+    """main.py wires ui.show_thumbnail in here, so a screen capture appears
+    on the dashboard as it happens."""
+    global _thumbnail_sink
+    _thumbnail_sink = sink_fn
+
+
+def _thumbnail_uri(image: Image.Image) -> str:
+    """A small JPEG data URI of what was captured."""
+    thumb = image.copy()
+    thumb.thumbnail((THUMBNAIL_MAX_EDGE, THUMBNAIL_MAX_EDGE), Image.LANCZOS)
+    buf = io.BytesIO()
+    thumb.save(buf, format="JPEG", quality=THUMBNAIL_QUALITY)
+    return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
+
+
+def _send_thumbnail(image: Image.Image, label: str) -> None:
+    """Best effort, always. A dashboard thumbnail is a nicety - it must never
+    be the reason a spoken answer doesn't arrive."""
+    if _thumbnail_sink is None:
+        return
+    try:
+        _thumbnail_sink(_thumbnail_uri(image), label)
+    except Exception as exc:
+        print(f"[vision] couldn't send the thumbnail: {exc!r}")
+
+
 VISION_SYSTEM_PROMPT = (
     "You are the vision system for Athena, a spoken voice assistant. You are "
     "shown a screenshot of the user's screen. Answer their question about it "
@@ -104,6 +143,10 @@ def analyze_screen(question: str, system_prompt: str = VISION_SYSTEM_PROMPT,
     except Exception as exc:
         print(f"[vision] screen capture failed: {exc}")
         return "I couldn't capture your screen just now."
+
+    # Show it on the dashboard now, before the model call - the audience sees
+    # what Athena is looking at while she's still thinking about it.
+    _send_thumbnail(image, "active window" if active_window_only else "screen")
 
     try:
         b64 = to_base64_jpeg(image)

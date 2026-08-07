@@ -107,6 +107,22 @@
   #hud-state { color: var(--accent); }
   #minbtn { background: none; border: 1px solid var(--line); color: var(--dim); font: inherit; width: 24px; height: 20px; line-height: 1; cursor: pointer; }
   #minbtn:hover { color: var(--accent); border-color: var(--line2); }
+  /* ---- screenshot thumbnail: what Athena just looked at ---- */
+  #shotcard {
+    position: absolute; left: 12px; bottom: 10px; z-index: 5;
+    border: 1px solid var(--line2); background: var(--bg);
+    padding: 6px; display: none; max-width: 210px;
+    box-shadow: 0 0 22px rgba(0,0,0,0.6);
+    opacity: 0; transform: translateY(8px); transition: all 0.28s ease;
+  }
+  #shotcard.shown { display: block; opacity: 1; transform: none; }
+  #shotcard img { display: block; width: 196px; height: auto; }
+  #shotcard .cap {
+    display: flex; justify-content: space-between; gap: 8px; margin-top: 5px;
+    font-size: 8px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--dim);
+  }
+  #shotcard .cap .what { color: var(--accent); }
+
   /* ---- session counters: small, corner, never competes with the log ---- */
   #counters {
     position: absolute; right: 12px; bottom: 10px; z-index: 5;
@@ -389,6 +405,10 @@
         </div>
         <div id="pill">Awaiting</div>
         <canvas id="wave" width="300" height="44"></canvas>
+        <div id="shotcard">
+          <img id="shotimg" alt="">
+          <div class="cap"><span class="what" id="shotwhat">screen</span><span id="shotwhen"></span></div>
+        </div>
         <div id="counters">
           <div class="ctr"><span class="num" id="ctr-turns">0</span><span class="cap">turns</span></div>
           <div class="ctr"><span class="num" id="ctr-tools">0</span><span class="cap">tools</span></div>
@@ -814,6 +834,29 @@
     if ("brain" in o) document.getElementById("lat-brain").textContent = Number(o.brain).toFixed(2) + "s";
     if ("tts" in o) document.getElementById("lat-tts").textContent = Number(o.tts).toFixed(2) + "s";
   };
+  /* What Athena just looked at. Called from Python when see_screen runs.
+     A bad or missing image must leave the dashboard alone, so the card only
+     appears once the browser has actually decoded the picture. */
+  window.showThumbnail = function (dataUri, label) {
+    try {
+      var card = document.getElementById("shotcard");
+      var img = document.getElementById("shotimg");
+      if (!card || !img || !dataUri) { return; }
+      img.onerror = function () {
+        card.classList.remove("shown");
+        console.warn("[shot] image failed to decode");
+      };
+      img.onload = function () {
+        var what = document.getElementById("shotwhat");
+        var when = document.getElementById("shotwhen");
+        if (what) { what.textContent = String(label || "screen"); }
+        if (when) { when.textContent = new Date().toTimeString().slice(0, 8); }
+        card.classList.add("shown");
+      };
+      img.src = String(dataUri);
+    } catch (err) { console.warn("[shot] showThumbnail failed", err); }
+  };
+
   window.showConfirm = function (q) { document.getElementById("confirm-q").textContent = String(q); document.getElementById("confirm").classList.add("show"); };
   window.hideConfirm = function () { document.getElementById("confirm").classList.remove("show"); };
   window.openSessions = function () { document.body.classList.add("rail-open"); };

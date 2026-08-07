@@ -291,7 +291,20 @@ capture_screen() -> PIL.Image
 capture_active_window() -> PIL.Image        # falls back to full screen
 ask_about_screen(question, active_window_only=False) -> str
 save_screenshot(path=None, active_window_only=False) -> str | None
+
+set_thumbnail_sink(sink_fn=None) -> None    # main.py wires ui.show_thumbnail
 ```
+
+**Dashboard thumbnail.** When a capture happens, a small JPEG data URI
+(`THUMBNAIL_MAX_EDGE` 360px, quality 62 — ~22KB worst case, since it crosses
+to the page as a string inside `evaluate_js`) is pushed to
+`ui.show_thumbnail`, which calls `window.showThumbnail(uri, label)`. It fires
+**before** the model call, so the audience sees what Athena is looking at
+while she's still thinking about it. Entirely best-effort: with no sink wired,
+or a sink that raises, vision behaves exactly as it did before — a thumbnail
+must never be the reason a spoken answer doesn't arrive. On the page the card
+only appears once the browser has decoded the image, so a corrupt URI hides
+it rather than showing a broken frame.
 
 Adding a skill = write the function, add it to `SKILLS`, add its schema to
 `brain.TOOLS`, and put its name in one of the sets in `safety.py`.

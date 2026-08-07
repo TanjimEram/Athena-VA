@@ -224,6 +224,14 @@ def set_status(status: dict) -> None:
     _js(f"window.setStatus && window.setStatus({json.dumps(status)})")
 
 
+def show_thumbnail(data_uri: str, label: str = "screen") -> None:
+    """Put what Athena just looked at on the dashboard. `data_uri` is a small
+    inline JPEG from vision.py - kept small deliberately, since it crosses to
+    the page as a string inside evaluate_js."""
+    _js(f"window.showThumbnail && window.showThumbnail({json.dumps(str(data_uri))}, "
+        f"{json.dumps(str(label))})")
+
+
 def show_confirm(question: str) -> None:
     _js(f"window.showConfirm && window.showConfirm({json.dumps(str(question))})")
 

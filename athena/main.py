@@ -429,6 +429,9 @@ def main() -> None:
     # waits for a yes. Without this it states the plan and does nothing.
     from athena import sheets
     sheets.set_confirm(_chain_confirm)
+    # When Athena looks at the screen, show what she saw on the dashboard.
+    from athena import vision
+    vision.set_thumbnail_sink(ui.show_thumbnail)
     ui.on_typed_input = _on_typed
     ui.on_confirm = _on_confirm_click
     # ui.on_orb_click stays default: click expands to the dashboard.

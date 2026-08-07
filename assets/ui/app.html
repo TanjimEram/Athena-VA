@@ -102,6 +102,40 @@
   #hud-state { color: var(--accent); }
   #minbtn { background: none; border: 1px solid var(--line); color: var(--dim); font: inherit; width: 24px; height: 20px; line-height: 1; cursor: pointer; }
   #minbtn:hover { color: var(--accent); border-color: var(--line2); }
+  /* ---- pipeline stage lights: sized to read from the back of a room ---- */
+  #pipeline { flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
+              gap: 0; padding: 14px 16px 12px 16px; border-bottom: 1px solid var(--line); }
+  .stage { display: flex; flex-direction: column; align-items: center; gap: 7px; flex: 0 0 auto; }
+  .stage .bulb {
+    width: 34px; height: 34px; border-radius: 50%;
+    border: 2px solid var(--line2); background: rgba(255,255,255,0.02);
+    transition: all 0.2s ease;
+  }
+  .stage .name {
+    font-size: 12px; letter-spacing: 0.24em; text-transform: uppercase;
+    color: var(--dim); transition: all 0.2s ease; white-space: nowrap;
+  }
+  .stage-link { width: 54px; height: 2px; background: var(--line); margin: 0 6px 21px 6px;
+                flex: 0 0 auto; transition: background 0.2s ease; }
+  /* armed: idle, waiting for the wake word */
+  .stage.armed .bulb { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(79,214,232,0.10); }
+  .stage.armed .name { color: var(--accent); opacity: 0.75; }
+  /* done: already happened this turn, dimly lit until reset */
+  .stage.done .bulb { border-color: var(--accent); background: rgba(79,214,232,0.22); }
+  .stage.done .name { color: var(--accent); opacity: 0.6; }
+  .stage-link.done { background: var(--accent); opacity: 0.45; }
+  /* active: happening right now */
+  .stage.active .bulb {
+    border-color: var(--accent); background: var(--accent);
+    transform: scale(1.28); box-shadow: 0 0 16px 4px rgba(79,214,232,0.55);
+  }
+  .stage.active .name { color: var(--accent); opacity: 1; font-weight: 600; }
+  .stage.hit .bulb { animation: stagehit 0.45s ease; }
+  @keyframes stagehit {
+    0%   { transform: scale(1); box-shadow: 0 0 0 0 rgba(79,214,232,0.7); }
+    45%  { transform: scale(1.4); box-shadow: 0 0 20px 8px rgba(79,214,232,0.6); }
+    100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(79,214,232,0); }
+  }
   #main { flex: 1; display: grid; grid-template-columns: 44px 1fr 340px; gap: 14px; padding: 14px; min-height: 0; transition: grid-template-columns 0.25s ease; }
   body.rail-open #main { grid-template-columns: 200px 1fr 340px; }
   #rail { border: 1px solid var(--line); background: var(--panel); display: flex; flex-direction: column; gap: 2px; padding: 8px 0; overflow: hidden; }
@@ -247,6 +281,17 @@
         <button id="minbtn" title="collapse to orb">&ndash;</button>
       </div>
     </header>
+    <div id="pipeline">
+      <div class="stage" data-stage="wake"><div class="bulb"></div><div class="name">Wake</div></div>
+      <div class="stage-link"></div>
+      <div class="stage" data-stage="listen"><div class="bulb"></div><div class="name">Listen</div></div>
+      <div class="stage-link"></div>
+      <div class="stage" data-stage="think"><div class="bulb"></div><div class="name">Think</div></div>
+      <div class="stage-link"></div>
+      <div class="stage" data-stage="act"><div class="bulb"></div><div class="name">Act</div></div>
+      <div class="stage-link"></div>
+      <div class="stage" data-stage="speak"><div class="bulb"></div><div class="name">Speak</div></div>
+    </div>
     <div id="main">
       <nav id="rail">
         <div class="railitem" id="rail-sessions"><span class="glyph">&#9636;</span><span class="name">Sessions</span></div>
@@ -340,8 +385,57 @@
     document.body.classList.toggle("dock-right", side !== "left");
   };
 
+  /* ---- pipeline stage lights ----------------------------------------
+     Driven entirely by events Python already sends: setState for where we
+     are, addLogLine for "a tool just ran". Every entry point is wrapped -
+     a broken animation must never take the dashboard down. */
+  var PIPELINE = (function () {
+    var ORDER = ["wake", "listen", "think", "act", "speak"];
+    function nodes() { return document.querySelectorAll("#pipeline .stage"); }
+    function links() { return document.querySelectorAll("#pipeline .stage-link"); }
+    function clear() {
+      nodes().forEach(function (n) { n.classList.remove("active", "done", "armed"); });
+      links().forEach(function (l) { l.classList.remove("done"); });
+    }
+    return {
+      /* Mark one stage as happening now; everything before it is done. */
+      set: function (stage) {
+        try {
+          var index = ORDER.indexOf(stage);
+          if (index === -1) { return; }
+          nodes().forEach(function (n) {
+            var i = ORDER.indexOf(n.getAttribute("data-stage"));
+            n.classList.remove("active", "armed");
+            if (i < index) { n.classList.add("done"); }
+            else if (i === index) { n.classList.add("active"); n.classList.remove("done"); }
+          });
+          links().forEach(function (l, i) { l.classList.toggle("done", i < index); });
+        } catch (err) { console.warn("[pipeline] set failed", err); }
+      },
+      /* A tool ran: flash ACT and leave it lit. */
+      hit: function (stage) {
+        try {
+          var node = document.querySelector('#pipeline .stage[data-stage="' + stage + '"]');
+          if (!node) { return; }
+          node.classList.add("done", "hit");
+          setTimeout(function () { node.classList.remove("hit"); }, 460);
+        } catch (err) { console.warn("[pipeline] hit failed", err); }
+      },
+      /* Back to waiting for the wake word. */
+      reset: function () {
+        try {
+          clear();
+          var wake = document.querySelector('#pipeline .stage[data-stage="wake"]');
+          if (wake) { wake.classList.add("armed"); }
+        } catch (err) { console.warn("[pipeline] reset failed", err); }
+      }
+    };
+  })();
+  try { PIPELINE.reset(); } catch (err) { console.warn("[pipeline] init failed", err); }
+
   /* state + amplitude drive both views */
   var STATES = ["idle", "listening", "thinking", "speaking", "confirm"];
+  var STATE_STAGE = { listening: "listen", thinking: "think", speaking: "speak" };
   var PILL = { idle: "Awaiting", listening: "Listening", thinking: "Thinking", speaking: "Speaking", confirm: "Confirm" };
   window.setState = function (s) {
     if (STATES.indexOf(s) === -1) { s = "idle"; }
@@ -349,6 +443,12 @@
     document.body.classList.add("state-" + s);
     var pill = document.getElementById("pill"); if (pill) { pill.textContent = PILL[s]; }
     var hud = document.getElementById("hud-state"); if (hud) { hud.textContent = PILL[s].toUpperCase(); }
+    try {
+      if (s === "idle") { PIPELINE.reset(); }
+      else if (STATE_STAGE[s]) { PIPELINE.set(STATE_STAGE[s]); }
+      /* 'confirm' deliberately leaves the lights where they are - the turn
+         hasn't moved on, it's waiting on the user. */
+    } catch (err) { console.warn("[pipeline] state hook failed", err); }
     console.log("[app] setState " + s);
     return s;
   };
@@ -388,6 +488,8 @@
     row.appendChild(txt); box.appendChild(row);
     while (box.children.length > 200) { box.removeChild(box.firstChild); }
     box.scrollTop = box.scrollHeight;
+    /* A tool log line means a tool just ran - that's the ACT stage. */
+    try { PIPELINE.hit("act"); } catch (err) { console.warn("[pipeline] log hook failed", err); }
   };
   window.addTranscript = function (who, text, instant) {
     var box = document.getElementById("chat");

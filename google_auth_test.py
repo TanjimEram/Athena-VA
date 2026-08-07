@@ -24,6 +24,7 @@ SCOPE_NAMES = {
     "https://www.googleapis.com/auth/gmail.readonly": "read your email",
     "https://www.googleapis.com/auth/gmail.compose": "draft and send email",
     "https://www.googleapis.com/auth/spreadsheets": "read and edit your spreadsheets",
+    "https://www.googleapis.com/auth/contacts.readonly": "read your starred contacts",
 }
 
 

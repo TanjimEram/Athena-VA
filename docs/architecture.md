@@ -40,6 +40,58 @@ map phrases like "train your wake word" to a detailed openWakeWord-Colab goal.
 Skill `guide_me(goal)` (free tier); main.py wires `guide.set_io` so the orb
 reacts (speaking/listening) during a guide.
 
+### athena/agents.py — specialist agents (DONE)
+An agent is a system prompt, the subset of tools it may be OFFERED, and
+optionally a model. Narrowing the tool list improves tool choice (42 schemas
+is a lot to pick from) and cuts ~50–90% of the per-request token cost.
+
+**Membership is not permission.** An agent holding a tool only means that tool
+is put in front of the model; `safety.py` remains the single authority and its
+tier check still runs before execution. `_agent_tools` also intersects with
+`settings.is_skill_enabled`, so a skill switched off in the dashboard stays off
+inside an agent.
+
+```python
+AGENTS: dict[str, dict]      # name -> {prompt, tools, model, description}
+tools_for(agent) -> list     # brain.TOOLS filtered by name
+tool_names(agent) -> set  /  missing_tools(agent) -> set
+prompt_for(agent) / model_for(agent) / exists(agent) / get(agent)
+extra_context(agent, user_text) -> str
+route(user_text, current_agent=None) -> str
+score(user_text) -> dict     # what the router matched, for debugging
+wants_exit / wants_consultant / wants_consultant_exit
+```
+
+Agents: `general` (derived from `safety.FREE`, so never empty or stale),
+`operator`, `scribe`, `analyst`, `researcher`, `consultant`.
+
+**Routing is cheap first.** Weighted keyword tables decide; a model call
+(`llama-3.1-8b-instant`, one word out) happens only when two or more agents
+genuinely compete. A weak signal nobody contests is not ambiguous — "open
+notepad" scores 1 and needs no help. Measured: 35/35 test utterances decided
+with no model call. Routing is **sticky** across turns, so a follow-up like
+"now sort it by score" stays put. It never raises and never returns a name
+that isn't an agent.
+
+### athena/contacts.py — people Athena can offer to reach (DONE)
+Two ways in, both deliberate: typed into `settings["trusted_contacts"]`, or
+`pull_from_google()`, which loads the contacts the user **starred** via the
+People API (`contacts.readonly`). Starred only — the full contact list is
+everyone you've ever emailed, which is a different question from who you'd
+want called, and inferring closeness from message frequency is not something
+Athena does.
+
+```python
+list_contacts() / add_contact(name, email, relationship) / remove_contact(name)
+find(name) -> dict | None  /  reachable() -> list  /  describe_contacts() -> str
+pull_from_google() -> str
+reach_out(name, owner="") -> str
+```
+
+`reach_out` goes through `mail.send_email`, which reads the recipient back and
+refuses without an explicit yes — so nothing is ever sent autonomously. The
+message says only "can you check in on me", never what the user said.
+
 ### athena/config.py  — settings (DONE)
 Loads `.env`, holds every constant. No other file reads environment variables.
 
@@ -102,7 +154,8 @@ think_stream(user_text, history=None) -> (generator, result)
 # low-latency single-action path: generator yields text pieces as the model
 # writes; feed to tts.speak_stream. (Used before the multi-step upgrade.)
 
-run_agent(user_text, history=None, on_step=None, confirm=None) -> dict
+run_agent(user_text, history=None, on_step=None, confirm=None,
+          agent=None) -> dict
 # MULTI-STEP: independent actions are batched into ONE model call (few
 # tokens/requests - matters on the free tier); dependent actions chain one
 # at a time with results fed back. Capped at 5 steps, stops after a batch or
@@ -121,6 +174,19 @@ run_agent(user_text, history=None, on_step=None, confirm=None) -> dict
 run_confirmed(tool_name: str, args: dict) -> str
 # executes a confirm-level tool AFTER the user says yes; returns spoken result
 
+# agent= names a specialist from agents.py: its prompt is prepended to the
+# system message and its tools replace the full list. IGNORED unless
+# config.AGENTS_ENABLED (default False) - with the flag off the request body
+# is byte-identical to before agents existed, which is the rollback path.
+# An agent with NO tools sends no `tools` key at all, not an empty array.
+
+_distress_turn(user_text) -> dict
+# safety.is_distress() is checked FIRST, before the messages are even built,
+# so no persona, agent prompt or personality setting can sit on top of it.
+# Persona dropped, no tools, and this turn is NOT logged to Supabase. The
+# pointer to a real person is appended deterministically rather than left to
+# the model, so it can't go missing.
+
 NEVER_BATCHED: set     # {"send_email"} - skipped if bundled with other calls
 SELF_CONFIRMING: set   # {"send_email"} - the skill asks in its own words
 CONFIRM_PHRASING: dict # short yes/no wording per tool; the generic phrasing
@@ -133,7 +199,26 @@ CONFIRM_PHRASING: dict # short yes/no wording per tool; the generic phrasing
 ```python
 classify(tool_name: str) -> str        # 'free' | 'confirm' | 'blocked'
 confirm_needed(tool_name: str) -> bool
+
+is_distress(text: str) -> bool         # the floor
+distress_matches(text: str) -> list    # which phrases tripped it, for debugging
+DISTRESS_PHRASES / DISTRESS_EXCLUSIONS
 ```
+
+**The distress floor** is a hard rule on the words themselves — the same kind
+of thing as a tool tier, and for the same reason: a judgement call can be
+talked around, and this one shouldn't be. `DISTRESS_EXCLUSIONS` are blanked
+out of the text *before* the triggers are looked for, so "this spreadsheet is
+killing me" and "that cake was to die for" don't fire. Both tenses of each
+self-harm phrase are listed — a missed inflection is a missed turn.
+
+Deliberately excluded: "can't go on", "can't do this anymore". Said about a
+bad week far more often than a life, and the false-positive rate would train
+the user to talk around the mode.
+
+Known limits, stated plainly: substring matching on a speech transcript will
+miss indirect phrasing and will occasionally fire on a song lyric. The
+asymmetry is deliberate — firing wrongly costs one warm reply.
 
 Current policy — free: open_app, open_website, web_search, get_system_info,
 see_screen, look_up, research, guide_me, open/close_dashboard, read_document,

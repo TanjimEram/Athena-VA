@@ -34,6 +34,81 @@ CONFIRM = {"set_volume", "lock_screen",
 BLOCKED: set[str] = set()  # nothing blocked yet
 
 
+# --------------------------------------------------------------------------
+# The distress floor.
+#
+# A hard rule, matched on the words themselves - the same kind of thing as a
+# tool tier, and for the same reason: a judgement call is a thing that can be
+# talked around, and this one shouldn't be. It runs BEFORE any persona or
+# agent prompt is applied, so nothing Athena has been told to be can sit on
+# top of it.
+#
+# Known limits, stated plainly: this is substring matching on a speech
+# transcript. It will miss indirect phrasing ("I'm tired of everything") and
+# it will occasionally fire on a quote or a song lyric. That asymmetry is
+# deliberate. Firing when it shouldn't costs one plain, warm reply. Not
+# firing when it should costs something else.
+# --------------------------------------------------------------------------
+
+DISTRESS_PHRASES = (
+    # intent
+    "kill myself", "killing myself", "end my life", "ending my life",
+    "take my own life", "taking my own life", "commit suicide", "suicidal",
+    "end it all",
+    # not wanting to be here
+    "want to die", "wanna die", "want to be dead", "wish i was dead",
+    "wish i were dead", "better off dead", "don't want to be here anymore",
+    "dont want to be here anymore", "don't want to exist",
+    "dont want to exist", "don't want to live", "dont want to live",
+    "no reason to live", "nothing to live for",
+    # self-harm. Both tenses of each: people say "I've been hurting myself"
+    # at least as often as "I hurt myself", and a missed inflection is a
+    # missed turn.
+    "hurt myself", "hurting myself", "harm myself", "harming myself",
+    "cut myself", "cutting myself",
+    "overdose", "overdosing",
+    "take all my pills", "taking all my pills",
+)
+
+# Blanked out of the text BEFORE the phrases above are looked for, so the
+# ordinary figurative uses of these words don't trip anything.
+DISTRESS_EXCLUSIONS = (
+    "killing me", "killing it", "kill for", "could murder a",
+    "dying to", "dying for", "to die for", "dying laughing",
+    "dead tired", "dead serious", "drop dead", "dead easy",
+    "suicide squad", "suicide mission", "career suicide",
+    "political suicide", "social suicide",
+)
+
+# Deliberately NOT triggers: "can't go on", "can't do this anymore". They're
+# said about a spreadsheet or a bad week far more often than about a life,
+# and the false-positive rate would train the user to talk around the mode.
+
+
+def _normalise(text: str) -> str:
+    return " ".join(str(text or "").lower().split())
+
+
+def is_distress(text: str) -> bool:
+    """True if this turn must drop everything else and respond plainly.
+
+    Not a diagnosis and not a model judgement - just whether the words are
+    there, with the common figurative uses removed first."""
+    cleaned = _normalise(text)
+    for idiom in DISTRESS_EXCLUSIONS:
+        cleaned = cleaned.replace(idiom, " ")
+    return any(phrase in cleaned for phrase in DISTRESS_PHRASES)
+
+
+def distress_matches(text: str) -> list:
+    """Which phrases tripped it. For the test, and for explaining a false
+    positive - never spoken to the user."""
+    cleaned = _normalise(text)
+    for idiom in DISTRESS_EXCLUSIONS:
+        cleaned = cleaned.replace(idiom, " ")
+    return [phrase for phrase in DISTRESS_PHRASES if phrase in cleaned]
+
+
 def classify(tool_name: str) -> str:
     """Return 'free', 'confirm', or 'blocked' for a tool name.
     Unknown tools are treated as blocked — safer to refuse than to guess."""

@@ -84,9 +84,16 @@ async def _synth_async(text: str) -> io.BytesIO:
     # in the dashboard applies on the very next sentence with no restart.
     from athena import settings
     voice = settings.get("tts_voice", config.TTS_VOICE)
-    rate = _pct(settings.get("voice_rate", 0))
+    rate = _pct(settings.get("voice_rate", config.TTS_RATE))
     volume = _pct(settings.get("voice_volume", 0))
-    pitch = _hz(settings.get("voice_pitch", 0))
+    pitch = _hz(settings.get("voice_pitch", config.TTS_PITCH))
+    if _mode == "consultant":
+        # Slower and a shade lower for that conversation. Applied on top of
+        # whatever the user set, not instead of it.
+        rate = _pct(int(settings.get("voice_rate", config.TTS_RATE))
+                    + config.CONSULTANT_TTS_RATE)
+        pitch = _hz(int(settings.get("voice_pitch", config.TTS_PITCH))
+                    + config.CONSULTANT_TTS_PITCH)
     # Short connect timeout: the service's connects occasionally hang, and
     # failing fast + retrying on a fresh connection beats waiting 10 s.
     communicate = edge_tts.Communicate(
@@ -97,6 +104,21 @@ async def _synth_async(text: str) -> io.BytesIO:
         if chunk["type"] == "audio":
             buf.write(chunk["data"])
     return buf
+
+
+# Which mode the voice is in. main.py sets this when the agent changes;
+# None means the user's own settings, unmodified.
+_mode: str | None = None
+
+
+def set_mode(mode: str | None) -> None:
+    """Colour the delivery for a mode ('consultant'), or None for normal."""
+    global _mode
+    _mode = mode
+
+
+def mode() -> str | None:
+    return _mode
 
 
 def _pct(v) -> str:

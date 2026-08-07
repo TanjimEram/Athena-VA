@@ -33,6 +33,10 @@ SCOPES = [
     # "list spreadsheets" call in the Sheets API though, so finding one by
     # NAME still goes through Drive and so still only sees our own files.
     "https://www.googleapis.com/auth/spreadsheets",
+    # Read-only, and used for one thing: loading the contacts you STARRED, so
+    # you don't have to type them in. Athena never mines this to work out who
+    # you're close to - starring is a choice you made.
+    "https://www.googleapis.com/auth/contacts.readonly",
 ]
 
 _creds = None

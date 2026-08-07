@@ -289,6 +289,7 @@
       <span><i class="dot2" id="dot-supabase"></i>supabase</span>
       <span><i class="dot2" id="dot-mic"></i>mic</span>
       <span class="grow"></span>
+      <span id="stat-agent">MODE --</span>
       <span id="stat-cpu">CPU --%</span><span id="stat-bat">BAT --%</span>
       <span id="latency">STT <span id="lat-stt">-</span> / BRAIN <span id="lat-brain">-</span> / TTS <span id="lat-tts">-</span></span>
     </footer>
@@ -404,6 +405,7 @@
     if ("groq" in o) setDot("dot-groq", o.groq);
     if ("supabase" in o) setDot("dot-supabase", o.supabase);
     if ("mic" in o) setDot("dot-mic", o.mic);
+    if ("agent" in o) document.getElementById("stat-agent").textContent = "MODE " + String(o.agent).toUpperCase();
     if ("cpu" in o) document.getElementById("stat-cpu").textContent = "CPU " + Math.round(o.cpu) + "%";
     if ("battery" in o) document.getElementById("stat-bat").textContent = "BAT " + Math.round(o.battery) + "%";
     if ("stt" in o) document.getElementById("lat-stt").textContent = Number(o.stt).toFixed(2) + "s";

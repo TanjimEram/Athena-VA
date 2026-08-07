@@ -53,6 +53,13 @@ DEFAULTS = {
     "guide_wait_mode": "manual",   # "manual" (say 'next') | "auto" (timer)
     "guide_auto_seconds": 4,
     "guide_max_steps": 12,
+    # --- People Athena can offer to contact for you ---
+    # Personal, so per-machine and gitignored - unlike the hotlines in
+    # config.py, which are public. Shape:
+    #   {"name": "Sara", "email": "sara@example.com", "relationship": "sister"}
+    # Fill by hand, or say "pull my contacts" to load your starred Google
+    # contacts. Athena always ASKS before messaging anyone.
+    "trusted_contacts": [],
     # --- Memory ---
     "memory_enabled": True,
     # --- System ---

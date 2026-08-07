@@ -33,6 +33,12 @@ GEMINI_MODEL = "gemini-2.0-flash"
 # so setting this can never leave the sheets feature broken.
 SHEETS_PROVIDER = os.getenv("SHEETS_PROVIDER", "groq")
 
+# Specialist agents (athena/agents.py). OFF by default: with this False,
+# run_agent takes exactly the path it took before agents existed, sending the
+# same full tool list. This is the rollback switch - don't remove it.
+AGENTS_ENABLED = os.getenv("AGENTS_ENABLED", "").strip().lower() in (
+    "1", "true", "yes", "on")
+
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # Where the signed-in token is cached (gitignored). Per-machine, like
@@ -47,6 +53,40 @@ BRAIN_MODEL = "llama-3.3-70b-versatile"
 
 # Voice for text-to-speech: Irish female, our FRIDAY sound.
 TTS_VOICE = "en-IE-EmilyNeural"
+# Baseline prosody. Percent for rate, Hz for pitch, 0 = the voice's own.
+# (The edge-tts CLI needs --rate=-8% with an equals sign for negatives; the
+# Python API we use takes "-8%" directly, so there's nothing to work around.)
+TTS_RATE = 0
+TTS_PITCH = 0
+# Consultant mode speaks slower and a little lower. Not a gimmick: the
+# default delivery is brisk, and brisk is wrong for that conversation.
+CONSULTANT_TTS_RATE = -8
+CONSULTANT_TTS_PITCH = -4
+
+# ==========================================================================
+# >>> FILL THESE IN <<<
+# Crisis lines Athena can name when the distress floor trips. These are
+# PUBLIC information, which is why they live here in git rather than in
+# settings.json - your own contacts are personal and go there instead.
+#
+# Look yours up at https://findahelpline.com or https://befrienders.org and
+# paste in verified numbers for YOUR country. They are left blank on purpose:
+# a wrong crisis number is worse than none, and I'm not guessing at digits.
+#
+# Entries still containing FILL_ME are skipped, so an unfinished list makes
+# Athena speak generally rather than read a placeholder out loud.
+# ==========================================================================
+DISTRESS_HOTLINES = [
+    # ("what to call it", "how to reach it")
+    ("FILL_ME: your local crisis line", "FILL_ME: number"),
+    ("FILL_ME: emergency services", "FILL_ME: number"),
+]
+
+
+def hotlines() -> list:
+    """The hotlines that have actually been filled in."""
+    return [(label, contact) for label, contact in DISTRESS_HOTLINES
+            if "FILL_ME" not in label and "FILL_ME" not in contact]
 
 # Speech-to-text model on Groq.
 STT_MODEL = "whisper-large-v3-turbo"

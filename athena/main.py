@@ -39,6 +39,10 @@ _stopping = threading.Event()     # set on window close -> aborts any in-progres
 _turn_lock = threading.Lock()     # one spoken/typed turn at a time
 _history: list[dict] = []
 _latency: dict[str, float] = {}   # stt / brain / tts, seconds
+# Which specialist is handling things. Held across turns so a follow-up like
+# "now sort it by score" doesn't need re-routing. Stays None (and unused)
+# unless config.AGENTS_ENABLED.
+_agent: str | None = None
 
 _confirm_event = threading.Event()
 _confirm_clicked: bool | None = None
@@ -207,9 +211,30 @@ def _do_turn(user_text: str) -> None:
     ui.add_transcript("you", user_text)
     ui.set_state("thinking")
 
+    # Pick the specialist before thinking, so the model is offered a handful
+    # of tools instead of forty. With AGENTS_ENABLED off this is skipped
+    # entirely and run_agent behaves exactly as it always has.
+    global _agent
+    if config.AGENTS_ENABLED:
+        from athena import agents
+        try:
+            routed = agents.route(user_text, _agent)
+        except Exception as exc:            # routing must never kill a turn
+            print(f"[main] routing failed ({exc!r}) - staying general")
+            routed = agents.FALLBACK
+        if routed != _agent:
+            print(f"[main] agent: {_agent} -> {routed}")
+            ui.add_log(f"agent: {routed}", "free")
+            ui.set_status({"agent": routed})
+            # The consultant speaks slower and lower; everything else uses
+            # the user's own voice settings unchanged.
+            tts.set_mode("consultant" if routed == agents.CONSULTANT else None)
+        _agent = routed
+
     turn_started = time.monotonic()
     result = brain.run_agent(
-        user_text, _history, on_step=_log_step, confirm=_chain_confirm
+        user_text, _history, on_step=_log_step, confirm=_chain_confirm,
+        agent=_agent,
     )
     reply = result["reply_text"]
     _latency["brain"] = round(time.monotonic() - turn_started, 2)

@@ -690,9 +690,12 @@ TOOLS = [
 
 
 def _chat(messages: list, use_tools: bool, max_tokens: int | None = None,
-          temperature: float | None = None):
+          temperature: float | None = None, tools: list | None = None):
     """One completion call to Groq. Model + reply-length read from settings
-    at CALL TIME so dashboard changes apply on the next turn."""
+    at CALL TIME so dashboard changes apply on the next turn.
+
+    `tools` narrows what's offered (an agent's subset). None means the full
+    list, which is the behaviour from before agents existed."""
     from athena import settings
     kwargs = dict(
         model=settings.get("brain_model", config.BRAIN_MODEL),
@@ -701,7 +704,7 @@ def _chat(messages: list, use_tools: bool, max_tokens: int | None = None,
         max_tokens=max_tokens or int(settings.get("brain_max_tokens", config.BRAIN_MAX_TOKENS)),
     )
     if use_tools:
-        kwargs["tools"] = _active_tools()
+        kwargs["tools"] = _active_tools() if tools is None else tools
         kwargs["tool_choice"] = "auto"
     return config.get_groq_client().chat.completions.create(**kwargs)
 
@@ -1030,7 +1033,7 @@ SELF_CONFIRMING = {"send_email", "apply_sheet_operation"}
 
 
 def run_agent(user_text: str, history: list | None = None,
-              on_step=None, confirm=None) -> dict:
+              on_step=None, confirm=None, agent: str | None = None) -> dict:
     """Fulfil a possibly multi-step request. The model may return several
     tool calls at once (independent steps) or one at a time (dependent
     steps, results fed back so it can decide the next action). Safety is
@@ -1041,11 +1044,40 @@ def run_agent(user_text: str, history: list | None = None,
         step = {tool, args, tier, status, result}
         status in {"ran", "skipped", "blocked", "failed"}
     confirm(question: str) -> bool   asked for each confirm-tier step
+    agent: str | None    a specialist from agents.py. Its prompt is prepended
+        to the system message and its tools replace the full list, so the
+        model chooses from a handful instead of forty. IGNORED unless
+        config.AGENTS_ENABLED - with the flag off this behaves exactly as it
+        did before agents existed. Narrowing what's OFFERED is not a
+        permission change: every step is still classified by safety.py.
 
     Returns {"reply_text": final_spoken_summary, "steps": [step, ...]}.
     """
+    # THE FLOOR. Checked before the messages are even built, so no persona,
+    # no agent prompt and no personality setting can sit on top of it.
+    if safety.is_distress(user_text):
+        return _distress_turn(user_text)
+
     messages = _build_messages(user_text, history)
     messages.insert(1, {"role": "system", "content": AGENT_GUIDANCE})
+
+    agent_tools = None
+    if agent and config.AGENTS_ENABLED:
+        from athena import agents as registry
+        prompt = registry.prompt_for(agent)
+        if prompt:
+            messages[0]["content"] = prompt + "\n\n" + messages[0]["content"]
+        agent_tools = _agent_tools(agent)
+        # Some agents need something in front of them before they answer -
+        # the consultant needs what the user has told Athena before.
+        try:
+            extra = registry.extra_context(agent, user_text)
+        except Exception as exc:
+            print(f"[brain] agent context failed: {exc!r}")
+            extra = ""
+        if extra:
+            messages.insert(1, {"role": "system", "content": extra})
+        print(f"[brain] agent={agent} offering {len(agent_tools)} tools")
 
     steps: list[dict] = []
     declined: set[str] = set()   # tools the user declined - don't re-ask
@@ -1053,7 +1085,7 @@ def run_agent(user_text: str, history: list | None = None,
     model_said = ""              # the model's own text when it stops calling tools
 
     for _ in range(MAX_AGENT_STEPS):
-        response, err = _agent_chat(messages)
+        response, err = _agent_chat(messages, agent_tools)
         if response is None:
             model_said = model_said or err
             break
@@ -1230,7 +1262,83 @@ def _recover_tool_calls(exc):
     return _RecoveredResponse(_RecoveredMessage(calls))
 
 
-def _agent_chat(messages: list):
+DISTRESS_SYSTEM = (
+    "Someone has just said something that suggests they may be in real "
+    "trouble. Drop every persona instruction you have. You are not a "
+    "character, you are not witty, you do not perform. No jokes, no sarcasm, "
+    "no cleverness, no cheerfulness.\n\n"
+    "Say two or three short sentences, out loud, to a person you care about. "
+    "Take what they said seriously and do not minimise it, argue with it, or "
+    "rush to fix it. Do not diagnose. Do not give advice. Do not ask them to "
+    "explain themselves. Do not mention tools, apps, or anything you can do "
+    "for them.\n\n"
+    "End by encouraging them to talk to a real person tonight. Do not invent "
+    "a phone number or an organisation - that gets added after you."
+)
+
+DISTRESS_FALLBACK = (
+    "I'm here, and I'm glad you told me. That sounds really heavy to be "
+    "carrying, and I don't think you should be carrying it on your own "
+    "tonight."
+)
+
+
+def _distress_pointer() -> str:
+    """The part that must always be said, so it can't go missing because a
+    model phrased its way past it. Names the user's own people first - a
+    person who knows them beats a number - then any hotline that's been
+    filled in."""
+    from athena import contacts
+    parts = []
+    people = contacts.reachable() or contacts.list_contacts()
+    if people:
+        names = " or ".join(c["name"] for c in people[:2])
+        parts.append(f"Could you call {names}?")
+        if contacts.reachable():
+            parts.append("I can message them for you if you'd like - just say.")
+    else:
+        parts.append("Is there someone you could call right now?")
+
+    for label, contact in config.hotlines():
+        parts.append(f"You can also reach {label} on {contact}.")
+    return " ".join(parts)
+
+
+def _distress_turn(user_text: str) -> dict:
+    """One turn with the persona switched off. No tools, and nothing about
+    this turn goes to Supabase - what someone says at their worst is not
+    something to keep a record of."""
+    print("[brain] distress floor tripped - persona off, no tools, no logging")
+    try:
+        response = _chat(
+            [{"role": "system", "content": DISTRESS_SYSTEM},
+             {"role": "user", "content": user_text}],
+            use_tools=False, max_tokens=140, temperature=0.5)
+        spoken = (response.choices[0].message.content or "").strip()
+    except Exception as exc:
+        print(f"[brain] distress reply failed ({type(exc).__name__}) - using fallback")
+        spoken = ""
+
+    if not spoken:
+        spoken = DISTRESS_FALLBACK
+
+    pointer = _distress_pointer()
+    reply = f"{spoken} {pointer}".strip()
+    # Deliberately NOT calling memory.log_interaction_async here.
+    return {"reply_text": reply, "steps": []}
+
+
+def _agent_tools(agent: str) -> list:
+    """The tool schemas for one agent, still minus anything switched off in
+    settings. Agent membership narrows what's OFFERED; it is never a
+    permission grant, and safety.py still decides what may run."""
+    from athena import agents as registry
+    from athena import settings
+    return [tool for tool in registry.tools_for(agent)
+            if settings.is_skill_enabled(tool["function"]["name"])]
+
+
+def _agent_chat(messages: list, tools: list | None = None):
     """One agent model call, hardened against the intermittent failures that
     could wreck a live demo. Returns (response, None) on success, or
     (None, friendly_message) once all options are spent.
@@ -1240,10 +1348,14 @@ def _agent_chat(messages: list):
     the same temperature reproduces the same bad output); if it still won't
     parse, we recover the model's INTENDED call from the error and run it
     anyway. Rate limits back off; connection errors fail fast."""
+    # An agent with no tools at all does a plain chat completion: no `tools`
+    # key in the request, not an empty array (which the API rejects).
+    use_tools = tools is None or len(tools) > 0
     for attempt in range(4):
         temp = config.BRAIN_TEMPERATURE + 0.15 * attempt
         try:
-            return _chat(messages, use_tools=True, max_tokens=512, temperature=temp), None
+            return _chat(messages, use_tools=use_tools, max_tokens=512,
+                         temperature=temp, tools=tools), None
         except groq.BadRequestError as exc:
             if "tool_use_failed" not in str(exc):
                 print(f"[brain] agent bad request: {str(exc)[:160]}")

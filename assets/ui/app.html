@@ -103,6 +103,35 @@
   #hud-state { color: var(--accent); }
   #minbtn { background: none; border: 1px solid var(--line); color: var(--dim); font: inherit; width: 24px; height: 20px; line-height: 1; cursor: pointer; }
   #minbtn:hover { color: var(--accent); border-color: var(--line2); }
+  /* ---- boot sequence: a cover over the dashboard that always lifts ---- */
+  #boot {
+    position: fixed; inset: 0; z-index: 900; background: var(--bg);
+    display: none; flex-direction: column; align-items: center; justify-content: center;
+    gap: 22px; transition: opacity 0.45s ease;
+  }
+  body.booting.mode-dashboard #boot { display: flex; }
+  #boot.lifting { opacity: 0; pointer-events: none; }
+  #boot .bootbrand { font-size: 22px; letter-spacing: 0.62em; color: var(--accent); }
+  #boot .bootsub { font-size: 10px; letter-spacing: 0.3em; color: var(--dim); margin-top: -14px; }
+  #bootlist { display: flex; flex-direction: column; gap: 10px; min-width: 330px; margin-top: 8px; }
+  .bootrow {
+    display: flex; align-items: center; gap: 12px; font-size: 12px;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--dim);
+    opacity: 0; transform: translateY(6px); transition: all 0.3s ease;
+  }
+  .bootrow.shown { opacity: 1; transform: none; }
+  .bootrow .tick { width: 15px; text-align: center; color: var(--line2); }
+  .bootrow.ok .tick { color: var(--ok); }
+  .bootrow.ok { color: var(--text); }
+  .bootrow.bad .tick { color: var(--red); }
+  .bootrow.bad { color: var(--red); }
+  .bootrow .val { margin-left: auto; color: var(--dim); font-size: 10px; letter-spacing: 0.1em; }
+  #bootdone {
+    font-size: 17px; letter-spacing: 0.5em; color: var(--accent);
+    opacity: 0; transition: opacity 0.4s ease; margin-top: 6px;
+  }
+  #bootdone.shown { opacity: 1; }
+
   /* ---- pipeline stage lights: sized to read from the back of a room ---- */
   #pipeline { flex: 0 0 auto; display: flex; align-items: center; justify-content: center;
               gap: 0; padding: 14px 16px 12px 16px; border-bottom: 1px solid var(--line); }
@@ -284,6 +313,18 @@
     </div>
   </div>
 
+  <div id="boot">
+    <div class="bootbrand">ATHENA</div>
+    <div class="bootsub">// WINDOWS VOICE ASSISTANT</div>
+    <div id="bootlist">
+      <div class="bootrow" data-boot="mic"><span class="tick">&#9679;</span><span>Audio device</span><span class="val"></span></div>
+      <div class="bootrow" data-boot="groq"><span class="tick">&#9679;</span><span>Groq</span><span class="val"></span></div>
+      <div class="bootrow" data-boot="supabase"><span class="tick">&#9679;</span><span>Supabase</span><span class="val"></span></div>
+      <div class="bootrow" data-boot="wake"><span class="tick">&#9679;</span><span>Wake word</span><span class="val"></span></div>
+    </div>
+    <div id="bootdone">ATHENA ONLINE</div>
+  </div>
+
   <div id="dashboard-view">
     <header id="topbar">
       <div class="brand"><span class="word">ATHENA</span><span class="sub">// WINDOWS VOICE ASSISTANT</span></div>
@@ -387,6 +428,9 @@
   window.showDashboard = function () {
     document.body.classList.remove("mode-orb");
     document.body.classList.add("mode-dashboard");
+    /* First time the dashboard is shown, play the boot sequence. Later
+       switches between orb and dashboard don't replay it. */
+    try { if (window.BOOT) { BOOT.start(); } } catch (err) { console.warn("[boot] hook failed", err); }
     console.log("[app] showDashboard");
   };
   window.showOrb = function () {
@@ -398,6 +442,101 @@
     document.body.classList.toggle("dock-left", side === "left");
     document.body.classList.toggle("dock-right", side !== "left");
   };
+
+  /* ---- boot sequence -------------------------------------------------
+     A cover over the dashboard that reveals four checks then lifts. It uses
+     real values from set_status when they've arrived and shows a dash when
+     they haven't - the status strip corrects itself a moment later either
+     way. A hard safety timer removes it no matter what, so a thrown error
+     can never leave the dashboard behind a cover. ?skipboot=1 bypasses it. */
+  var BOOT = (function () {
+    var ROWS = [
+      { key: "mic", label: "Audio device", on: "ready", off: "not found" },
+      { key: "groq", label: "Groq", on: "connected", off: "no key" },
+      { key: "supabase", label: "Supabase", on: "connected", off: "offline" },
+      { key: "wake", label: "Wake word", on: "armed", off: "armed" }
+    ];
+    var STEP = 650, HOLD = 400, LIFT = 450;   /* ~4.1s door to door */
+    var started = false, timers = [];
+
+    function row(key) { return document.querySelector('#boot .bootrow[data-boot="' + key + '"]'); }
+
+    function paint(spec) {
+      var el = row(spec.key);
+      if (!el) { return; }
+      var val = el.querySelector(".val");
+      el.classList.remove("ok", "bad");
+      if (spec.key === "wake") {          /* no status key; it's always armed */
+        el.classList.add("ok");
+        if (val) { val.textContent = spec.on; }
+        return;
+      }
+      if (!LAST_STATUS || !(spec.key in LAST_STATUS)) {
+        if (val) { val.textContent = "—"; }   /* nothing known yet */
+        return;
+      }
+      var good = !!LAST_STATUS[spec.key];
+      el.classList.add(good ? "ok" : "bad");
+      if (val) { val.textContent = good ? spec.on : spec.off; }
+    }
+
+    function finish() {
+      try {
+        var boot = document.getElementById("boot");
+        if (boot) { boot.classList.add("lifting"); }
+        timers.push(setTimeout(function () {
+          document.body.classList.remove("booting");
+          if (boot) { boot.classList.remove("lifting"); }
+        }, LIFT));
+      } catch (err) {
+        document.body.classList.remove("booting");
+      }
+    }
+
+    return {
+      start: function () {
+        try {
+          if (started) { return; }
+          started = true;
+          if (/[?&]skipboot=1/.test(window.location.search)) { return; }
+          document.body.classList.add("booting");
+          ROWS.forEach(function (spec, i) {
+            timers.push(setTimeout(function () {
+              try {
+                var el = row(spec.key);
+                if (el) { el.classList.add("shown"); }
+                paint(spec);
+              } catch (err) { console.warn("[boot] row failed", err); }
+            }, i * STEP));
+          });
+          var doneAt = ROWS.length * STEP + HOLD;
+          timers.push(setTimeout(function () {
+            var done = document.getElementById("bootdone");
+            if (done) { done.classList.add("shown"); }
+          }, doneAt));
+          timers.push(setTimeout(finish, doneAt + 700));
+          /* Belt and braces: whatever happened above, the cover comes off. */
+          timers.push(setTimeout(function () {
+            document.body.classList.remove("booting");
+          }, 6000));
+        } catch (err) {
+          console.warn("[boot] start failed", err);
+          document.body.classList.remove("booting");
+        }
+      },
+      /* Status arrived mid-sequence: fill in what we now know. */
+      refresh: function () {
+        try {
+          if (!document.body.classList.contains("booting")) { return; }
+          ROWS.forEach(function (spec) {
+            var el = row(spec.key);
+            if (el && el.classList.contains("shown")) { paint(spec); }
+          });
+        } catch (err) { console.warn("[boot] refresh failed", err); }
+      }
+    };
+  })();
+  window.BOOT = BOOT;
 
   /* ---- pipeline stage lights ----------------------------------------
      Driven entirely by events Python already sends: setState for where we
@@ -518,8 +657,15 @@
     var i = 0, t = setInterval(function () { i++; span.textContent = full.slice(0, i); if (i < full.length) { span.innerHTML += '<span class="caret">_</span>'; } box.scrollTop = box.scrollHeight; if (i >= full.length) { clearInterval(t); } }, 14);
   };
   function setDot(id, v) { document.getElementById(id).className = "dot2 " + (v ? "on" : "off"); }
+  /* The most recent status Python sent, so the boot sequence can show real
+     values if any have arrived by then. */
+  var LAST_STATUS = null;
   window.setStatus = function (o) {
     o = o || {};
+    try {
+      LAST_STATUS = Object.assign(LAST_STATUS || {}, o);
+      if (window.BOOT) { BOOT.refresh(); }
+    } catch (err) { console.warn("[boot] status capture failed", err); }
     if ("groq" in o) setDot("dot-groq", o.groq);
     if ("supabase" in o) setDot("dot-supabase", o.supabase);
     if ("mic" in o) setDot("dot-mic", o.mic);
@@ -539,6 +685,12 @@
 
   function tickClock() { var c = document.getElementById("clock"); if (c) c.textContent = new Date().toTimeString().slice(0, 8); }
   tickClock(); setInterval(tickClock, 1000);
+
+  /* If the window opened straight into dashboard mode, boot now rather than
+     waiting for a switch that isn't coming. */
+  try {
+    if (document.body.classList.contains("mode-dashboard")) { BOOT.start(); }
+  } catch (err) { console.warn("[boot] initial start failed", err); }
 
   /* ================= settings view ================= */
   function apiAsync(name) {

@@ -107,6 +107,27 @@
   #hud-state { color: var(--accent); }
   #minbtn { background: none; border: 1px solid var(--line); color: var(--dim); font: inherit; width: 24px; height: 20px; line-height: 1; cursor: pointer; }
   #minbtn:hover { color: var(--accent); border-color: var(--line2); }
+  /* ---- API budget meter in the status strip ---- */
+  #budget { display: flex; align-items: center; gap: 10px; }
+  #budget .bwrap { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }
+  #budget .btop { display: flex; justify-content: space-between; gap: 10px; font-size: 9px; letter-spacing: 0.1em; }
+  #budget .blabel { color: var(--dim); }
+  #budget .bval { color: var(--text); font-variant-numeric: tabular-nums; }
+  #budget .bar { height: 5px; background: rgba(255,255,255,0.07); position: relative; overflow: hidden; }
+  #budget .bar span {
+    position: absolute; left: 0; top: 0; bottom: 0; width: 0%;
+    background: var(--ok); transition: width 0.5s ease, background 0.3s ease;
+  }
+  #budget .bar.mid span { background: var(--amber); }
+  #budget .bar.low span { background: var(--red); }
+  #budget .bar.unknown span { width: 100%; background: rgba(255,255,255,0.06); }
+  #budget .rpd { color: var(--dim); font-size: 9px; letter-spacing: 0.1em; white-space: nowrap; }
+  #budget .rpd b { color: var(--text); font-weight: normal; font-variant-numeric: tabular-nums; }
+  #budget.throttled .bval, #budget.throttled .rpd b { color: var(--red); }
+  #bwait { display: none; color: var(--red); font-size: 11px; letter-spacing: 0.14em; white-space: nowrap; }
+  #budget.throttled #bwait { display: inline; }
+  #budget.throttled .bwrap { display: none; }
+
   /* ---- screenshot thumbnail: what Athena just looked at ---- */
   #shotcard {
     position: absolute; left: 12px; bottom: 10px; z-index: 5;
@@ -434,6 +455,14 @@
       <span><i class="dot2" id="dot-supabase"></i>supabase</span>
       <span><i class="dot2" id="dot-mic"></i>mic</span>
       <span class="grow"></span>
+      <span id="budget">
+        <span class="bwrap">
+          <span class="btop"><span class="blabel">This minute</span><span class="bval" id="btok">--</span></span>
+          <span class="bar unknown" id="bbar"><span></span></span>
+        </span>
+        <span id="bwait">Ready in --</span>
+        <span class="rpd">Today <b id="breq">--</b></span>
+      </span>
       <span id="stat-agent">MODE --</span>
       <span id="stat-cpu">CPU --%</span><span id="stat-bat">BAT --%</span>
       <span id="latency">STT <span id="lat-stt">-</span> / BRAIN <span id="lat-brain">-</span> / TTS <span id="lat-tts">-</span></span>
@@ -828,6 +857,9 @@
     if ("supabase" in o) setDot("dot-supabase", o.supabase);
     if ("mic" in o) setDot("dot-mic", o.mic);
     if ("agent" in o) document.getElementById("stat-agent").textContent = "MODE " + String(o.agent).toUpperCase();
+    try {
+      if ("usage" in o) { USAGE.data = o.usage; USAGE.at = Date.now(); renderBudget(); }
+    } catch (err) { console.warn("[budget] status hook failed", err); }
     if ("cpu" in o) document.getElementById("stat-cpu").textContent = "CPU " + Math.round(o.cpu) + "%";
     if ("battery" in o) document.getElementById("stat-bat").textContent = "BAT " + Math.round(o.battery) + "%";
     if ("stt" in o) document.getElementById("lat-stt").textContent = Number(o.stt).toFixed(2) + "s";
@@ -856,6 +888,64 @@
       img.src = String(dataUri);
     } catch (err) { console.warn("[shot] showThumbnail failed", err); }
   };
+
+  /* ---- API budget meter -----------------------------------------------
+     Fed by the usage block on the status payload that already arrives every
+     ~3s. The countdown ticks locally in between, so "Ready in 8s" actually
+     counts rather than stepping in threes. Anything unknown renders "--";
+     nothing here can throw into the status handler. */
+  var USAGE = { data: null, at: 0 };
+
+  function fmtNum(n) {
+    return (typeof n === "number" && isFinite(n)) ? Math.round(n).toLocaleString() : null;
+  }
+
+  function renderBudget() {
+    try {
+      var box = document.getElementById("budget");
+      if (!box) { return; }
+      var tokEl = document.getElementById("btok");
+      var barEl = document.getElementById("bbar");
+      var reqEl = document.getElementById("breq");
+      var waitEl = document.getElementById("bwait");
+      var u = USAGE.data;
+
+      if (!u) {
+        tokEl.textContent = "--"; reqEl.textContent = "--";
+        barEl.className = "bar unknown";
+        box.classList.remove("throttled");
+        return;
+      }
+      /* seconds since this snapshot was taken, so the clock keeps running */
+      var since = (Date.now() - USAGE.at) / 1000;
+
+      var wait = (typeof u.wait_s === "number") ? (u.wait_s - since) : null;
+      if (u.throttled && wait !== null && wait > 0) {
+        box.classList.add("throttled");
+        waitEl.textContent = "Ready in " + Math.ceil(wait) + "s";
+      } else {
+        box.classList.remove("throttled");
+      }
+
+      var left = fmtNum(u.tokens_left), cap = fmtNum(u.tokens_cap);
+      tokEl.textContent = (left !== null && cap !== null)
+        ? (left + " / " + cap + " tokens") : "--";
+
+      var pct = (typeof u.pct_tokens === "number") ? u.pct_tokens : null;
+      if (pct === null) {
+        barEl.className = "bar unknown";
+        barEl.firstElementChild.style.width = "";
+      } else {
+        barEl.className = "bar" + (pct < 20 ? " low" : (pct < 50 ? " mid" : ""));
+        barEl.firstElementChild.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + "%";
+      }
+
+      var rleft = fmtNum(u.requests_left), rcap = fmtNum(u.requests_cap);
+      reqEl.textContent = (rleft !== null && rcap !== null)
+        ? (rleft + " / " + rcap + " requests") : "--";
+    } catch (err) { console.warn("[budget] render failed", err); }
+  }
+  setInterval(renderBudget, 1000);
 
   window.showConfirm = function (q) { document.getElementById("confirm-q").textContent = String(q); document.getElementById("confirm").classList.add("show"); };
   window.hideConfirm = function () { document.getElementById("confirm").classList.remove("show"); };

@@ -349,6 +349,13 @@ def _push_status() -> None:
     if battery is not None:
         status["battery"] = battery.percent
     status.update({k: round(v, 2) for k, v in _latency.items()})
+    # Live API budget, on the payload that already goes out every ~3s rather
+    # than a channel of its own. Guarded: a missing meter shows "--".
+    try:
+        from athena import usage
+        status["usage"] = usage.snapshot()
+    except Exception as exc:
+        print(f"[main] couldn't read the usage meter: {exc!r}")
     ui.set_status(status)
 
 

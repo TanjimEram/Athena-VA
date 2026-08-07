@@ -706,7 +706,29 @@ def _chat(messages: list, use_tools: bool, max_tokens: int | None = None,
     if use_tools:
         kwargs["tools"] = _active_tools() if tools is None else tools
         kwargs["tool_choice"] = "auto"
-    return config.get_groq_client().chat.completions.create(**kwargs)
+    # with_raw_response so the rate-limit headers survive; .parse() returns
+    # exactly the object .create() used to, so everything downstream is
+    # unchanged. Recording is observation only - it adds no retry, no delay,
+    # and it can't alter the reply.
+    from athena import usage
+    try:
+        raw = config.get_groq_client().chat.completions.with_raw_response.create(**kwargs)
+    except Exception as exc:
+        try:
+            usage.note_error(exc)     # a 429 still carries the full picture
+        except Exception:
+            pass                      # the meter never changes what we raise
+        raise
+    completion = raw.parse()
+    # Guarded again here even though usage.record swallows its own errors:
+    # the rule is that a budget display can never break a conversation, and
+    # that shouldn't depend on another module keeping its promise.
+    try:
+        usage.record(raw.headers,
+                     getattr(getattr(completion, "usage", None), "total_tokens", None))
+    except Exception:
+        pass
+    return completion
 
 
 def _active_tools() -> list:

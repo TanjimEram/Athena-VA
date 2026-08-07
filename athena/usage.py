@@ -123,6 +123,11 @@ def record(headers, total_tokens=None) -> None:
                 if counted is not None:
                     _state["session_tokens"] += counted
                     _state["turns"] += 1
+            # retry-after only ever appears on a 429, so its presence IS the
+            # signal that we're throttled - no separate call needed.
+            retry_after = head.get("retry-after")
+            if retry_after is not None:
+                _state["throttled_until"] = now + max(parse_reset(retry_after), 0.0)
             _state["updated_at"] = now
     except Exception as exc:                 # never let the meter bite
         print(f"[usage] couldn't read rate-limit headers: {exc!r}")
@@ -137,6 +142,18 @@ def record_throttled(retry_after) -> None:
             _state["throttled_until"] = time.monotonic() + max(wait, 0.0)
     except Exception as exc:
         print(f"[usage] couldn't record the throttle: {exc!r}")
+
+
+def note_error(exc) -> None:
+    """Read whatever the failed response carried. A 429 still has the full
+    rate-limit picture on it, plus retry-after. Never raises, and never
+    changes what the caller does with the exception."""
+    try:
+        headers = getattr(getattr(exc, "response", None), "headers", None)
+        if headers:
+            record(headers)
+    except Exception as exc2:
+        print(f"[usage] couldn't read headers off the error: {exc2!r}")
 
 
 def _remaining(deadline, now) -> float | None:

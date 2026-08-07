@@ -61,12 +61,16 @@
   body.state-idle #orb { animation: breathe 4.5s ease-in-out infinite; }
   @keyframes breathe { 0%,100% { transform: scale(1); } 50% { transform: scale(1.05); } }
 
-  #bars { display: none; align-items: center; gap: 4px; height: 34px; }
-  body.state-listening #bars { display: flex; }
-  #bars div {
-    width: 5px; border-radius: 3px; background: rgba(var(--c), 0.95);
-    height: 8px; transition: height 0.14s ease-out;
+  /* The reactive ring replaces the five bars. Full-window canvas behind the
+     orb, pointer-events none so it cannot come between the mouse and
+     #orb-view - the click and drag handlers are untouched. */
+  #orbwave {
+    position: absolute; inset: 0; z-index: 0;
+    pointer-events: none;
   }
+  #orb { z-index: 1; }
+  /* kept in the DOM so nothing that looks for it breaks, never shown */
+  #bars { display: none !important; }
   #arc {
     position: absolute; inset: -8px; border-radius: 50%;
     border: 2.5px solid transparent;
@@ -319,6 +323,7 @@
 
   <!-- full-window, always-clickable orb surface -->
   <div id="orb-view">
+    <canvas id="orbwave"></canvas>
     <div id="orb">
       <div class="pulse p1"></div>
       <div class="pulse p2"></div>
@@ -674,12 +679,79 @@
   var mults = [0.5, 0.8, 1.0, 0.8, 0.5];
   var waveCtx = document.getElementById("wave").getContext("2d");
   var coreEl = document.getElementById("core");
+
+  /* ---- orb reactive ring ----------------------------------------------
+     One smooth closed curve whose radius follows set_amplitude, wobbled by
+     three harmonics so it breathes instead of stepping. Colour comes from
+     --c, so it shifts with state exactly like the rest of the orb. Draws
+     into #orbwave, which is pointer-events:none - the click and drag
+     handlers on #orb-view are not involved. */
+  var orbCanvas = document.getElementById("orbwave");
+  var orbCtx = null, orbRGB = "120,134,156", frame = 0;
+  try { orbCtx = orbCanvas ? orbCanvas.getContext("2d") : null; } catch (err) { orbCtx = null; }
+
+  function sizeOrbCanvas() {
+    try {
+      if (!orbCanvas) { return; }
+      var dpr = window.devicePixelRatio || 1;
+      var r = orbCanvas.getBoundingClientRect();
+      orbCanvas.width = Math.max(1, Math.round(r.width * dpr));
+      orbCanvas.height = Math.max(1, Math.round(r.height * dpr));
+      if (orbCtx) { orbCtx.setTransform(dpr, 0, 0, dpr, 0, 0); }
+    } catch (err) { console.warn("[orb] resize failed", err); }
+  }
+  sizeOrbCanvas();
+  window.addEventListener("resize", sizeOrbCanvas);
+
+  function drawOrbRing(now) {
+    if (!orbCtx || !orbCanvas) { return; }
+    var w = orbCanvas.clientWidth, h = orbCanvas.clientHeight;
+    if (!w || !h) { return; }
+    orbCtx.clearRect(0, 0, w, h);
+    var cx = w / 2, cy = h / 2;
+    var span = Math.min(w, h);
+    var base = span * 0.30, reach = span * 0.15;
+
+    var steps = 84;
+    orbCtx.beginPath();
+    for (var i = 0; i <= steps; i++) {
+      var a = (i / steps) * Math.PI * 2;
+      var wob = Math.sin(a * 3 + now / 430) * 0.34
+              + Math.sin(a * 5 - now / 570) * 0.20
+              + Math.sin(a * 2 + now / 310) * 0.16;
+      var rr = base + amp * reach * (1 + wob) + Math.sin(now / 1400) * span * 0.012;
+      var x = cx + Math.cos(a) * rr, y = cy + Math.sin(a) * rr;
+      if (i === 0) { orbCtx.moveTo(x, y); } else { orbCtx.lineTo(x, y); }
+    }
+    orbCtx.closePath();
+    orbCtx.strokeStyle = "rgba(" + orbRGB + "," + (0.5 + amp * 0.5).toFixed(3) + ")";
+    orbCtx.lineWidth = 2.2 + amp * 2.6;
+    orbCtx.shadowBlur = 9 + amp * 24;
+    orbCtx.shadowColor = "rgba(" + orbRGB + ",0.85)";
+    orbCtx.stroke();
+    orbCtx.shadowBlur = 0;
+
+    /* a faint second ring, trailing, so loud moments feel like they bloom */
+    if (amp > 0.04) {
+      orbCtx.beginPath();
+      orbCtx.arc(cx, cy, base + amp * reach * 1.55, 0, Math.PI * 2);
+      orbCtx.strokeStyle = "rgba(" + orbRGB + "," + (amp * 0.28).toFixed(3) + ")";
+      orbCtx.lineWidth = 1.2;
+      orbCtx.stroke();
+    }
+  }
+
   function animLoop(now) {
     amp += (ampTarget - amp) * 0.12;
-    for (var i = 0; i < bars.length; i++) {
-      var wob = 0.8 + 0.2 * Math.sin(now / 260 + i * 1.4);
-      bars[i].style.height = (7 + amp * 26 * mults[i] * wob) + "px";
-    }
+    try {
+      /* --c changes with state; re-read it occasionally rather than every
+         frame, to keep the loop off the style system. */
+      if ((frame++ % 15) === 0) {
+        var v = getComputedStyle(document.body).getPropertyValue("--c").trim();
+        if (v) { orbRGB = v; }
+      }
+      drawOrbRing(now);
+    } catch (err) { /* a dead ring must never stop the rest of the loop */ }
     waveCtx.clearRect(0, 0, 300, 44);
     waveCtx.fillStyle = "rgba(79,214,232,0.8)";
     var n = 46, bw = 3, gap = 300 / n;

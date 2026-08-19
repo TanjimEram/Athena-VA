@@ -260,6 +260,19 @@ def _do_turn(user_text: str) -> None:
     # has returned by here, so this can never cut across her own sentence.
     # Off unless config.USAGE_VOICE_ALERTS; the dashboard meter is the silent
     # default. pending_alert() says a given thing once, not every turn.
+    # Falling back is worth mentioning once - the replies get slower and the
+    # audience should know why. took_fallback() only returns True the first
+    # time, so this can't become a per-turn announcement.
+    if config.PROVIDER_FALLBACK_ENABLED:
+        try:
+            if brain.took_fallback():
+                from athena import providers
+                line = ("Switching to my backup, this may be a little slower.")
+                ui.add_log(f"provider: {providers.current_name()}", "confirm")
+                speak(line)
+        except Exception as exc:
+            print(f"[main] provider switch notice failed: {exc!r}")
+
     if config.USAGE_VOICE_ALERTS:
         try:
             from athena import usage
@@ -371,6 +384,12 @@ def _push_status() -> None:
         status["usage"] = usage.snapshot()
     except Exception as exc:
         print(f"[main] couldn't read the usage meter: {exc!r}")
+    if config.PROVIDER_FALLBACK_ENABLED:
+        try:
+            from athena import providers
+            status["providers"] = providers.status()
+        except Exception as exc:
+            print(f"[main] couldn't read the provider chain: {exc!r}")
     ui.set_status(status)
 
 

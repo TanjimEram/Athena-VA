@@ -29,6 +29,14 @@ DEFAULT_COOLDOWN = 60.0
 # provider parked for an hour is one we've effectively lost for the session.
 MAX_COOLDOWN = 15 * 60.0
 
+class NoToolProvider(Exception):
+    """Raised when an action is needed but every provider that can still be
+    reached is one we haven't confirmed does tool calling. Saying so is the
+    point - quietly answering in words would look like Athena deciding not
+    to act, which is a different and much more confusing failure."""
+
+
+_clients: dict = {}
 _lock = threading.Lock()
 # name -> monotonic time when it becomes usable again
 _cooling: dict = {}
@@ -171,6 +179,27 @@ def status() -> dict:
         print(f"[providers] status failed: {exc!r}")
         return {"enabled": False, "active": "none", "shortest_wait_s": None,
                 "providers": []}
+
+
+def client_for(provider: dict):
+    """An API client pointed at this provider, built once and reused.
+
+    The groq SDK is used for ALL of them - it takes a base_url and speaks the
+    OpenAI shape, so every provider in the chain works through it. That also
+    means every provider raises groq.RateLimitError, groq.APIConnectionError
+    and so on, exactly as before; brain.py's existing handlers keep working
+    without a translation layer. Bringing in a second SDK would have made
+    those handlers silently stop catching things."""
+    name = provider["name"]
+    with _lock:
+        if name in _clients:
+            return _clients[name]
+    import groq
+    client = groq.Groq(api_key=os.getenv(provider["key_env"]),
+                       base_url=provider["base_url"])
+    with _lock:
+        _clients[name] = client
+    return client
 
 
 def cooldown_from_headers(headers, default: float = DEFAULT_COOLDOWN) -> float:

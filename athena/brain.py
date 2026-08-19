@@ -689,6 +689,112 @@ TOOLS = [
 ]
 
 
+def _request(kwargs: dict, use_tools: bool):
+    """Make the completion request, falling through the provider chain if
+    one is rate limited. Returns the SDK's raw response either way.
+
+    With config.PROVIDER_FALLBACK_ENABLED off this is a single Groq call -
+    byte-for-byte what happened before providers existed. Only the transport
+    changes here; nothing about the reply, the steps or the tool handling
+    above it knows this function moved.
+
+    Every provider goes through the groq SDK with its own base_url, so a
+    429 anywhere still raises groq.RateLimitError and the existing handlers
+    upstream keep working unchanged."""
+    if not config.PROVIDER_FALLBACK_ENABLED:
+        return config.get_groq_client().chat.completions.with_raw_response.create(**kwargs)
+
+    from athena import providers
+
+    # Tool calling narrows the field: a provider we haven't confirmed can do
+    # it must never be handed an action to choose, because a plausible
+    # sentence instead of a tool call looks like Athena deciding not to act.
+    ready = providers.available()
+    if use_tools:
+        chain = [p for p in ready if p.get("supports_tools") is True]
+        if not chain and ready:
+            # Something can be reached, but nothing that takes actions.
+            raise providers.NoToolProvider(
+                "no tool-capable provider is available right now")
+    else:
+        chain = ready
+
+    if not chain:
+        # Everything is resting. Say how long and stop - never spin.
+        wait = providers.shortest_wait()
+        raise _AllProvidersCooling(wait)
+
+    first_error = None
+    for provider in chain:
+        try:
+            client = providers.client_for(provider)
+            call = dict(kwargs, model=provider["model"])
+            response = client.chat.completions.with_raw_response.create(**call)
+            if provider is not chain[0] or first_error is not None:
+                _note_provider_switch(provider["name"])
+            return response
+        except Exception as exc:
+            if first_error is None:
+                first_error = exc
+            cooled = _cooldown_for(exc, provider, providers)
+            if cooled is None:
+                raise            # not a throttle or an outage - a real error
+            continue
+    # The chain is spent. Re-raise the FIRST failure so everything upstream
+    # sees exactly the exception shape it has always handled.
+    raise first_error
+
+
+class _AllProvidersCooling(Exception):
+    """Every configured provider is in cooldown. Carries the shortest wait so
+    the spoken message can say how long, rather than just failing."""
+
+    def __init__(self, wait_s):
+        self.wait_s = wait_s
+        super().__init__(f"all providers cooling, {wait_s}s")
+
+
+def _cooldown_for(exc, provider: dict, providers) -> float | None:
+    """Rest this provider if the error was a throttle or an outage. Returns
+    the cooldown, or None if the error is one we shouldn't fall through on -
+    a malformed request is our bug and every provider will reject it."""
+    import groq
+    if isinstance(exc, groq.RateLimitError):
+        headers = getattr(getattr(exc, "response", None), "headers", None)
+        return providers.mark_cooldown(
+            provider["name"], providers.cooldown_from_headers(headers),
+            "rate limited")
+    if isinstance(exc, (groq.APIConnectionError, groq.APITimeoutError)):
+        return providers.mark_cooldown(provider["name"], 30, "unreachable")
+    if isinstance(exc, groq.AuthenticationError):
+        # A bad key won't fix itself; park it for the session.
+        return providers.mark_cooldown(
+            provider["name"], providers.MAX_COOLDOWN, "key rejected")
+    return None
+
+
+# Said once per session, not per turn - see _note_provider_switch.
+_switch_announced = False
+
+
+def _note_provider_switch(name: str) -> None:
+    """Remember that we fell back, so main.py can mention it once."""
+    global _switch_announced
+    if not _switch_announced:
+        _switch_announced = True
+        print(f"[brain] fell back to {name}")
+
+
+def took_fallback() -> bool:
+    """True once the chain has fallen back this session, and only the first
+    time it's asked - so the line is spoken once, not every turn."""
+    global _switch_announced
+    if _switch_announced:
+        _switch_announced = False
+        return True
+    return False
+
+
 def _chat(messages: list, use_tools: bool, max_tokens: int | None = None,
           temperature: float | None = None, tools: list | None = None):
     """One completion call to Groq. Model + reply-length read from settings
@@ -712,7 +818,7 @@ def _chat(messages: list, use_tools: bool, max_tokens: int | None = None,
     # and it can't alter the reply.
     from athena import usage
     try:
-        raw = config.get_groq_client().chat.completions.with_raw_response.create(**kwargs)
+        raw = _request(kwargs, use_tools)
     except Exception as exc:
         try:
             usage.note_error(exc)     # a 429 still carries the full picture
@@ -1388,7 +1494,21 @@ def _agent_chat(messages: list, tools: list | None = None):
             if recovered is not None:
                 return recovered, None
             return None, "Sorry, I couldn't work that one out. Could you rephrase it?"
-        except groq.RateLimitError as exc:
+        except _AllProvidersCooling as exc:
+            # Every provider is resting. Say how long and stop; retrying is
+            # what got us here.
+            return None, ("I've used up every model I can reach. "
+                          f"{_wait_phrase(int(exc.wait_s) if exc.wait_s else None)}")
+        except Exception as exc:
+            from athena import providers
+            if isinstance(exc, providers.NoToolProvider):
+                # Answering in words here would look like a decision not to
+                # act. Say plainly that the capability is missing.
+                return None, ("My main model is rate limited, and the backup "
+                              "I can reach can't carry out actions. Give it a "
+                              "moment and ask again.")
+            if not isinstance(exc, groq.RateLimitError):
+                raise
             # Do NOT retry on a rate limit - more requests only dig the hole
             # deeper. Fail fast with how long to wait (parsed from Groq).
             wait = _retry_after_seconds(exc)

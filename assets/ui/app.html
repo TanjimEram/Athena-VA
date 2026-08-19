@@ -128,6 +128,17 @@
   #budget.throttled #bwait { display: inline; }
   #budget.throttled .bwrap { display: none; }
 
+  /* ---- provider chain: which model is answering, and who's resting ---- */
+  #chain { display: none; align-items: center; gap: 6px; }
+  #chain.on { display: flex; }
+  #chain .pv {
+    font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase;
+    padding: 2px 5px; border: 1px solid var(--line2); color: var(--dim);
+  }
+  #chain .pv.active { color: var(--ok); border-color: var(--ok); }
+  #chain .pv.cooling { color: var(--amber); border-color: var(--amber); }
+  #chain .pv.off { opacity: 0.32; }
+
   /* ---- screenshot thumbnail: what Athena just looked at ---- */
   #shotcard {
     position: absolute; left: 12px; bottom: 10px; z-index: 5;
@@ -463,6 +474,7 @@
         <span id="bwait">Ready in --</span>
         <span class="rpd">Today <b id="breq">--</b></span>
       </span>
+      <span id="chain"></span>
       <span id="stat-agent">MODE --</span>
       <span id="stat-cpu">CPU --%</span><span id="stat-bat">BAT --%</span>
       <span id="latency">STT <span id="lat-stt">-</span> / BRAIN <span id="lat-brain">-</span> / TTS <span id="lat-tts">-</span></span>
@@ -860,6 +872,9 @@
     try {
       if ("usage" in o) { USAGE.data = o.usage; USAGE.at = Date.now(); renderBudget(); }
     } catch (err) { console.warn("[budget] status hook failed", err); }
+    try {
+      if ("providers" in o) { renderChain(o.providers); }
+    } catch (err) { console.warn("[chain] status hook failed", err); }
     if ("cpu" in o) document.getElementById("stat-cpu").textContent = "CPU " + Math.round(o.cpu) + "%";
     if ("battery" in o) document.getElementById("stat-bat").textContent = "BAT " + Math.round(o.battery) + "%";
     if ("stt" in o) document.getElementById("lat-stt").textContent = Number(o.stt).toFixed(2) + "s";
@@ -946,6 +961,34 @@
     } catch (err) { console.warn("[budget] render failed", err); }
   }
   setInterval(renderBudget, 1000);
+
+  /* Which model is answering, and which are resting. Only shown when the
+     fallback chain is switched on - otherwise there is nothing to say. */
+  function renderChain(state) {
+    try {
+      var box = document.getElementById("chain");
+      if (!box) { return; }
+      if (!state || !state.enabled || !state.providers || !state.providers.length) {
+        box.className = ""; box.innerHTML = ""; return;
+      }
+      box.className = "on";
+      box.innerHTML = "";
+      state.providers.forEach(function (p) {
+        var el = document.createElement("span");
+        var cls = "pv";
+        if (!p.configured) { cls += " off"; }
+        else if (p.cooling) { cls += " cooling"; }
+        else if (p.name === state.active) { cls += " active"; }
+        el.className = cls;
+        el.textContent = p.cooling && p.cooling_s
+          ? (p.name + " " + Math.ceil(p.cooling_s) + "s")
+          : p.name;
+        el.title = p.model + (p.configured ? "" : " (no key)")
+          + (p.trains_on_prompts ? " - free tier may train on prompts" : "");
+        box.appendChild(el);
+      });
+    } catch (err) { console.warn("[chain] render failed", err); }
+  }
 
   window.showConfirm = function (q) { document.getElementById("confirm-q").textContent = String(q); document.getElementById("confirm").classList.add("show"); };
   window.hideConfirm = function () { document.getElementById("confirm").classList.remove("show"); };

@@ -59,15 +59,30 @@ Keep a few seconds between requests (see rate limits below).
 
 ## If something hiccups mid-demo
 
-- **"I've hit my rate limit / per-minute limit"** — the free Groq tier caps
-  both requests-per-minute (~30) and tokens-per-minute (12,000). A
-  multi-step chain now uses only ~2 requests (independent actions are
-  batched into one model call), so at a normal demo pace — one command,
-  wait for the reply, talk to the audience, next command — you won't hit it.
-  Athena now tells you roughly how long to wait ("give me about 20 seconds")
-  and does NOT retry-hammer. If throttled, just wait that long and continue.
-  **Best insurance: use a fresh Groq API key for the presentation and don't
-  run test loops beforehand** (rapid-fire requests are what trip the limit).
+- **"I've hit my rate limit / per-minute limit"** — on the free tier,
+  `llama-3.3-70b-versatile` caps at **30 requests/min, 12,000 tokens/min,
+  1,000 requests/day and 100,000 tokens/day** (checked August 2026).
+
+  **The daily TOKEN cap is the one that ends a demo, not the request cap.**
+  At roughly 3,900 tokens of tool schema per call, 100K tokens/day is about
+  25 turns with the full tool list — or 50–100 with `AGENTS_ENABLED=1`
+  narrowing it. You will run out of tokens long before you run out of
+  requests. If you rehearse in the morning, you may have spent the day's
+  budget before the afternoon.
+
+  A multi-step chain uses only ~2 requests (independent actions are batched
+  into one model call), so at a normal demo pace — one command, wait for the
+  reply, talk to the audience, next command — the per-minute limits are
+  fine. Athena tells you roughly how long to wait ("give me about 20
+  seconds") and does NOT retry-hammer.
+
+  **Insurance, in order of effectiveness:** run with `AGENTS_ENABLED=1` (cuts
+  tokens per call by 50–90%); set `PROVIDER_FALLBACK_ENABLED=1` so she falls
+  through to another free provider instead of stopping; use a fresh Groq key;
+  and don't run test loops beforehand.
+
+  Note that Groq's limits are **per organisation, not per key** — a second
+  key on the same account gives you no extra allowance.
 - **She doesn't hear the wake word** — lower `WAKE_THRESHOLD` in
   `athena/config.py` (e.g. 0.4). Too many false wakes → raise it (0.6).
 - **She doesn't catch your request** — speak right after the chirp; the mic

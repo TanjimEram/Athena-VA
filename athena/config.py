@@ -33,6 +33,100 @@ GEMINI_MODEL = "gemini-2.0-flash"
 # so setting this can never leave the sheets feature broken.
 SHEETS_PROVIDER = os.getenv("SHEETS_PROVIDER", "groq")
 
+MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+
+# ==========================================================================
+# Provider fallback chain.
+#
+# When one provider's rate limit is hit, Athena falls through to the next
+# instead of failing. Ordered: fastest and most capable first, last resort
+# last. Every one of these speaks the OpenAI API shape, so a base URL, a key
+# and a model name is all it takes - there is no per-provider client code.
+#
+# `limits` is what the provider's own documentation said as of August 2026.
+# It is for display and sanity only - the LIVE numbers come from the
+# rate-limit headers on each response (see usage.py), which are always
+# right even when this table has gone stale.
+#
+# Rate limits are per ORGANISATION, not per key. Extra keys on one account
+# buy nothing, which is why there is no key rotation here and shouldn't be.
+#
+# `trains_on_prompts` marks providers whose free tier may use what you send
+# to train models. Document and spreadsheet content should not be routed
+# to those.
+# ==========================================================================
+PROVIDERS = [
+    {
+        "name": "groq",
+        "base_url": "https://api.groq.com/openai/v1",
+        "key_env": "GROQ_API_KEY",
+        "model": "llama-3.3-70b-versatile",
+        "supports_tools": True,
+        # 100K tokens/DAY is the binding limit here, not the 1,000 requests:
+        # at ~3,900 tokens of tool schema per call that's ~25 turns a day
+        # with the full tool list, or 50-100 with agents narrowing it.
+        "limits": {"rpm": 30, "rpd": 1000, "tpm": 12000, "tpd": 100000},
+        "trains_on_prompts": False,
+    },
+    {
+        "name": "gemini",
+        # Google's OpenAI-compatibility endpoint, so the same client works.
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+        "key_env": "GEMINI_API_KEY",
+        "model": "gemini-2.5-flash",
+        # Unverified on purpose - measured by provider_tools_test.py.
+        "supports_tools": None,
+        # Google stopped publishing free-tier numbers; their rate-limits page
+        # now points at the AI Studio dashboard. Reported figures after the
+        # December 2025 cut vary by account (10 RPM, and anywhere from 250
+        # down to ~20 RPD), so writing one here would be a guess. Check
+        # https://aistudio.google.com/rate-limit for yours.
+        "limits": {"rpm": 10, "rpd": None, "tpm": 250000, "tpd": None},
+        "trains_on_prompts": True,
+    },
+    {
+        "name": "mistral",
+        "base_url": "https://api.mistral.ai/v1",
+        "key_env": "MISTRAL_API_KEY",
+        "model": "mistral-small-latest",
+        "supports_tools": None,
+        # 1 request per SECOND is the tight one; the token allowance is huge.
+        "limits": {"rpm": 60, "rpd": None, "tpm": 500000, "tpd": None},
+        "trains_on_prompts": True,
+    },
+    {
+        "name": "nvidia_nim",
+        "base_url": "https://integrate.api.nvidia.com/v1",
+        "key_env": "NVIDIA_API_KEY",
+        "model": "meta/llama-3.3-70b-instruct",
+        "supports_tools": True,
+        # NVIDIA replaced the old fixed credit allowance with a rate limit
+        # that varies by model and current traffic, so only the RPM is solid.
+        "limits": {"rpm": 40, "rpd": None, "tpm": None, "tpd": None},
+        "trains_on_prompts": False,
+    },
+    {
+        "name": "groq_small",
+        "base_url": "https://api.groq.com/openai/v1",
+        "key_env": "GROQ_API_KEY",
+        "model": "llama-3.1-8b-instant",
+        "supports_tools": True,
+        # Same organisation as `groq`, so a daily exhaustion there does NOT
+        # free this up - but the buckets are per model, so a per-minute
+        # throttle on the 70b does. Note 6K TPM, half the 70b's: our tool
+        # schema alone is ~3,900 tokens, so tool-calling here throttles fast.
+        # Fine as a conversational last resort, weak as an action one.
+        "limits": {"rpm": 30, "rpd": 14400, "tpm": 6000, "tpd": 500000},
+        "trains_on_prompts": False,
+    },
+]
+
+# OFF by default. With this False nothing reads PROVIDERS and every call goes
+# to Groq exactly as it did before. This is the rollback path - don't remove.
+PROVIDER_FALLBACK_ENABLED = os.getenv(
+    "PROVIDER_FALLBACK_ENABLED", "").strip().lower() in ("1", "true", "yes", "on")
+
 # Specialist agents (athena/agents.py). OFF by default: with this False,
 # run_agent takes exactly the path it took before agents existed, sending the
 # same full tool list. This is the rollback switch - don't remove it.

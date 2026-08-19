@@ -184,19 +184,25 @@ def status() -> dict:
 def client_for(provider: dict):
     """An API client pointed at this provider, built once and reused.
 
-    The groq SDK is used for ALL of them - it takes a base_url and speaks the
-    OpenAI shape, so every provider in the chain works through it. That also
-    means every provider raises groq.RateLimitError, groq.APIConnectionError
-    and so on, exactly as before; brain.py's existing handlers keep working
-    without a translation layer. Bringing in a second SDK would have made
-    those handlers silently stop catching things."""
+    The OpenAI SDK, for every provider including Groq. The groq SDK looks
+    like it would work - it accepts a base_url - but it hardcodes
+    "/openai/v1/chat/completions" onto whatever you give it, so it can only
+    ever reach Groq. Mistral is at /v1/chat/completions and Gemini at
+    /v1beta/openai/chat/completions, and neither is reachable that way. That
+    was found by provider_tools_test.py returning 404s from every provider,
+    which is what that script is for.
+
+    The cost of using a second SDK is that these raise openai.* exceptions,
+    not groq.*, and brain.py's handlers expect groq.*. brain._request
+    translates at the boundary so nothing upstream has to know."""
     name = provider["name"]
     with _lock:
         if name in _clients:
             return _clients[name]
-    import groq
-    client = groq.Groq(api_key=os.getenv(provider["key_env"]),
-                       base_url=provider["base_url"])
+    import openai
+    client = openai.OpenAI(api_key=os.getenv(provider["key_env"]),
+                           base_url=provider["base_url"], max_retries=0,
+                           timeout=45.0)
     with _lock:
         _clients[name] = client
     return client

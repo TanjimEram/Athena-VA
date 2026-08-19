@@ -32,8 +32,10 @@ VOICES = [
     "en-GB-LibbyNeural", "en-AU-NatashaNeural", "en-CA-ClaraNeural",
 ]
 MODELS = {
-    "groq": ["llama-3.3-70b-versatile", "llama-3.1-8b-instant",
-             "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"],
+    # The Llama 3.x entries were removed in August 2026 - Groq retired them
+    # and picking one from this list would have 404'd every turn.
+    "groq": ["openai/gpt-oss-120b", "openai/gpt-oss-20b",
+             "openai/gpt-oss-safeguard-20b", "qwen/qwen3.6-27b", "allam-2-7b"],
     "gemini": ["gemini-2.0-flash", "gemini-1.5-pro"],
     "openai": ["gpt-4o", "gpt-4o-mini"],
     "anthropic": ["claude-sonnet-4-5", "claude-opus-4-5"],

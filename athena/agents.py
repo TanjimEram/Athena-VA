@@ -285,7 +285,10 @@ _STICKY_MARGIN = 2
 # Below this, nothing matched clearly enough to be sure.
 _CONFIDENT = 3
 
-_ROUTER_MODEL = "llama-3.1-8b-instant"
+# Small and fast, for the rare ambiguous route. llama-3.1-8b-instant was
+# retired by Groq; gpt-oss-20b replaces it and also scored 3/3 on the real
+# tool schema, so it is a safe fallback brain as well as a router.
+_ROUTER_MODEL = "openai/gpt-oss-20b"
 _ROUTER_SYSTEM = (
     "You label a request with the ONE specialist best suited to it. Reply "
     "with a single word from the list and nothing else - no punctuation, no "

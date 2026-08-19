@@ -22,3 +22,7 @@ google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
 python-docx
+# One client for the whole provider fallback chain. The groq SDK can't be
+# reused for it: it hardcodes /openai/v1/ onto any base_url, so it reaches
+# Groq and nothing else.
+openai

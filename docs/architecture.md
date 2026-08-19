@@ -92,6 +92,53 @@ reach_out(name, owner="") -> str
 refuses without an explicit yes — so nothing is ever sent autonomously. The
 message says only "can you check in on me", never what the user said.
 
+### athena/providers.py — the fallback chain (DONE)
+When one provider's rate limit is hit, Athena falls through to the next
+instead of failing. `config.PROVIDERS` is the ordered chain; each entry is a
+base URL, a key env var, a model and a `supports_tools` flag.
+`PROVIDER_FALLBACK_ENABLED` (default **False**) is the rollback path — off,
+every call is a single Groq call exactly as before.
+
+```python
+available() -> list        # keyed and not resting, in chain order
+current() / current_name() -> the provider a request would use now
+for_tools() -> dict | None # first provider MEASURED to do tool calling
+mark_cooldown(name, seconds, reason) -> float
+reset(name=None) / shortest_wait() -> float | None
+status() -> dict           # for the dashboard
+client_for(provider)       # OpenAI SDK, pointed at that provider
+cooldown_from_headers(headers) -> float
+```
+
+**Why the OpenAI SDK and not the groq one.** `groq.Groq` accepts a `base_url`
+and looks like it would work, but it hardcodes `/openai/v1/chat/completions`
+onto whatever you give it — so it can reach Groq and nothing else. Mistral is
+at `/v1/…`, Gemini at `/v1beta/openai/…`. This was found by
+`provider_tools_test.py` returning 404s from every provider. The cost is that
+the chain raises `openai.*` exceptions while the rest of Athena raises
+`groq.*`; `brain._as_groq_error` translates at the boundary so
+`_agent_chat`'s existing handlers keep catching rate limits.
+
+`brain._request` is the only new seam. On 429 or an outage it cools that
+provider for what the response says, advances, and retries once. A malformed
+request propagates immediately and cools nothing — that's our bug, and every
+provider would reject it. When everything is cooling it stops without a call
+and says the shortest wait. Tool calls only go to providers whose support has
+been **measured**; `supports_tools=None` counts as no, and if an action is
+needed with nothing capable reachable she says so rather than answering in
+words.
+
+`run_agent`'s step logic, batching, dedup, ledger and malformed-tool-call
+recovery are untouched — only the transport beneath them changed.
+
+**Privacy:** the Gemini and Mistral free tiers may use prompts for training.
+`trains_on_prompts` marks them, and document or spreadsheet content should
+not be routed there.
+
+Verify with `python providers_test.py`, `python fallback_test.py` (both
+offline) and `python provider_tools_test.py` (real calls, prints a per-
+provider table; it never edits config).
+
 ### athena/config.py  — settings (DONE)
 Loads `.env`, holds every constant. No other file reads environment variables.
 

@@ -738,11 +738,14 @@ def _request(kwargs: dict, use_tools: bool):
                 first_error = exc
             cooled = _cooldown_for(exc, provider, providers)
             if cooled is None:
-                raise            # not a throttle or an outage - a real error
+                # Not a throttle or an outage - our own bad request. Every
+                # provider would reject it, so stop rather than parade it
+                # around the chain.
+                raise _as_groq_error(exc)
             continue
-    # The chain is spent. Re-raise the FIRST failure so everything upstream
-    # sees exactly the exception shape it has always handled.
-    raise first_error
+    # The chain is spent. Re-raise the FIRST failure, translated, so
+    # everything upstream sees the exception shape it has always handled.
+    raise _as_groq_error(first_error)
 
 
 class _AllProvidersCooling(Exception):
@@ -754,23 +757,70 @@ class _AllProvidersCooling(Exception):
         super().__init__(f"all providers cooling, {wait_s}s")
 
 
+def _error_kind(exc) -> str:
+    """What KIND of failure this is, whichever SDK raised it.
+
+    The chain uses the OpenAI SDK; everything else in Athena uses the Groq
+    one. Matching on class alone would mean handling each twice and missing
+    whichever we forgot, so this asks about the shape instead: both SDKs
+    expose the HTTP status, and that is what actually decides."""
+    status = getattr(exc, "status_code", None)
+    if status is None:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 429:
+        return "rate_limited"
+    if status in (401, 403):
+        return "auth"
+    if status in (400, 404, 422):
+        return "our_fault"          # a bad request or a wrong model name
+    if status is not None and status >= 500:
+        return "outage"
+    # No status at all: a connection or timeout error.
+    name = type(exc).__name__.lower()
+    if "connection" in name or "timeout" in name or "apierror" in name:
+        return "outage"
+    return "unknown"
+
+
 def _cooldown_for(exc, provider: dict, providers) -> float | None:
     """Rest this provider if the error was a throttle or an outage. Returns
-    the cooldown, or None if the error is one we shouldn't fall through on -
-    a malformed request is our bug and every provider will reject it."""
-    import groq
-    if isinstance(exc, groq.RateLimitError):
+    the cooldown, or None if it's an error we shouldn't fall through on - a
+    malformed request is our bug and every provider would reject it too."""
+    kind = _error_kind(exc)
+    if kind == "rate_limited":
         headers = getattr(getattr(exc, "response", None), "headers", None)
         return providers.mark_cooldown(
             provider["name"], providers.cooldown_from_headers(headers),
             "rate limited")
-    if isinstance(exc, (groq.APIConnectionError, groq.APITimeoutError)):
+    if kind == "outage":
         return providers.mark_cooldown(provider["name"], 30, "unreachable")
-    if isinstance(exc, groq.AuthenticationError):
-        # A bad key won't fix itself; park it for the session.
+    if kind == "auth":
+        # A rejected key won't fix itself; park it for the session.
         return providers.mark_cooldown(
             provider["name"], providers.MAX_COOLDOWN, "key rejected")
     return None
+
+
+def _as_groq_error(exc):
+    """Re-dress a provider error as the groq class upstream expects.
+
+    _agent_chat catches groq.RateLimitError and groq.BadRequestError by name.
+    When the chain's last failure came from the OpenAI SDK those would sail
+    straight past, taking the rate-limit backoff with them, so it is
+    translated here rather than upstream learning about two SDKs."""
+    import groq
+    if isinstance(exc, (groq.APIStatusError, groq.APIConnectionError)):
+        return exc                       # already the right family
+    kind = _error_kind(exc)
+    response = getattr(exc, "response", None)
+    try:
+        if kind == "rate_limited" and response is not None:
+            return groq.RateLimitError(str(exc), response=response, body=None)
+        if kind == "our_fault" and response is not None:
+            return groq.BadRequestError(str(exc), response=response, body=None)
+    except Exception:
+        pass
+    return exc                           # unrecognised: pass it through as-is
 
 
 # Said once per session, not per turn - see _note_provider_switch.

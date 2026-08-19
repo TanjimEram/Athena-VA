@@ -61,7 +61,8 @@ PROVIDERS = [
         "name": "groq",
         "base_url": "https://api.groq.com/openai/v1",
         "key_env": "GROQ_API_KEY",
-        "model": "llama-3.3-70b-versatile",
+        # Measured 3/3 on the real tool schema - see provider_tools_test.py.
+        "model": "openai/gpt-oss-120b",
         "supports_tools": True,
         # 100K tokens/DAY is the binding limit here, not the 1,000 requests:
         # at ~3,900 tokens of tool schema per call that's ~25 turns a day
@@ -110,7 +111,8 @@ PROVIDERS = [
         "name": "groq_small",
         "base_url": "https://api.groq.com/openai/v1",
         "key_env": "GROQ_API_KEY",
-        "model": "llama-3.1-8b-instant",
+        # Also measured 3/3, and cheaper per call than the 120b.
+        "model": "openai/gpt-oss-20b",
         "supports_tools": True,
         # Same organisation as `groq`, so a daily exhaustion there does NOT
         # free this up - but the buckets are per model, so a per-minute
@@ -151,7 +153,15 @@ GOOGLE_TOKEN_FILE = os.path.join(
 )
 
 # Model names live here so swapping models is a one-line change.
-BRAIN_MODEL = "llama-3.3-70b-versatile"
+# Groq retired the Llama 3.x models: as of August 2026 neither
+# llama-3.3-70b-versatile nor llama-3.1-8b-instant is in the catalogue any
+# more, and calls to them 404. Verified against the live model list and
+# replaced with openai/gpt-oss-120b, which scored 3/3 on our real 42-tool
+# schema (correct tool, correct arguments, and correctly declining to call
+# one when the user was just chatting). To re-check what's available:
+#   python -c "from athena import config; print([m.id for m in
+#              config.get_groq_client().models.list().data])"
+BRAIN_MODEL = "openai/gpt-oss-120b"
 
 # Voice for text-to-speech: Irish female, our FRIDAY sound.
 TTS_VOICE = "en-IE-EmilyNeural"

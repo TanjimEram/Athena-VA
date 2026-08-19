@@ -86,8 +86,11 @@ if __name__ == "__main__":
         config.PROVIDER_FALLBACK_ENABLED = True
         providers.reset(); calls.clear(); behaviour.clear()
         out = brain._chat([{"role": "user", "content": "hi"}], use_tools=False)
-        check("went to groq", calls == [("groq", "llama-3.3-70b-versatile")],
-              str(calls))
+        # Read the model from config rather than hardcoding it - providers
+        # retire models, and a test that pins one rots silently.
+        primary = config.PROVIDERS[0]["model"]
+        check("went to groq with its configured model",
+              calls == [("groq", primary)], str(calls))
         check("reply from groq", "groq" in out.choices[0].message.content)
         check("nothing announced a switch", brain.took_fallback() is False)
 
@@ -98,8 +101,8 @@ if __name__ == "__main__":
         out = brain._chat([{"role": "user", "content": "hi"}], use_tools=False)
         check("tried groq then gemini", [c[0] for c in calls] == ["groq", "gemini"],
               str([c[0] for c in calls]))
-        check("used gemini's own model name", calls[-1][1] == "gemini-2.5-flash",
-              str(calls[-1][1]))
+        check("used gemini's own model name",
+              calls[-1][1] == config.PROVIDERS[1]["model"], str(calls[-1][1]))
         check("reply came from gemini", "gemini" in out.choices[0].message.content)
         check("groq is now cooling",
               any(r["name"] == "groq" and r["cooling"]

@@ -34,12 +34,14 @@ LOG_PATH = os.path.join(
     "latency_log.jsonl")
 
 # Printed in this order; anything not listed here is appended after.
-STAGES = ["silence_wait", "stt", "brain_total", "tts_first_audio", "total"]
+STAGES = ["silence_wait", "stt", "brain_total", "tool_exec",
+          "tts_first_audio", "total"]
 
 LABELS = {
     "silence_wait": "silence wait (end of speech -> recorder stops)",
     "stt": "STT (upload + inference, not separable)",
-    "brain_total": "brain total (= TTFT; the call is blocking)",
+    "brain_total": "brain, ALL model calls this turn summed (= TTFT; blocking)",
+    "tool_exec": "tool execution, all steps summed",
     "tts_first_audio": "TTS first audio",
     "total": "TOTAL end-of-speech -> first word",
 }
@@ -95,6 +97,50 @@ def anchor(name: str, timestamp: float | None = None) -> None:
         pass
 
 
+def mark_request(provider: str, seconds: float) -> None:
+    """One model call. run_agent can make several in a turn - a batched call,
+    chain steps, then the summary - and a median over calls can't tell one
+    slow call from four fast ones, which need different fixes. So each is
+    kept individually, with the provider that served it: a turn that quietly
+    fell through to a backup would otherwise read as an unexplained outlier."""
+    if not _on():
+        return
+    try:
+        with _lock:
+            if _current is not None:
+                _current.setdefault("requests", []).append(
+                    {"provider": provider or "unknown", "s": float(seconds)})
+    except Exception:
+        pass
+
+
+def mark_tool(name: str, seconds: float) -> None:
+    """One skill execution. This is real dead air between the model choosing
+    an action and the result coming back, and nothing else measures it."""
+    if not _on():
+        return
+    try:
+        with _lock:
+            if _current is not None:
+                _current.setdefault("tools", []).append(
+                    {"tool": name, "s": float(seconds)})
+    except Exception:
+        pass
+
+
+def shape(label: str) -> None:
+    """What KIND of turn this was - conversational, single, multi, vision.
+    Medians differ by shape, and one blended median hides that."""
+    if not _on():
+        return
+    try:
+        with _lock:
+            if _current is not None:
+                _current["shape"] = label
+    except Exception:
+        pass
+
+
 def meta(key: str, value) -> None:
     """Something worth knowing that isn't a duration - wav_bytes, the model."""
     if not _on():
@@ -124,10 +170,24 @@ def end_turn(user_text: str = "") -> dict | None:
         if ended is not None and audible is not None:
             turn["stages"]["total"] = max(0.0, audible - ended)
 
+        requests = turn.get("requests", [])
+        tools_run = turn.get("tools", [])
+        if requests:
+            # Per TURN, not per request: how many calls, and how long they
+            # took altogether. The individual times are kept below.
+            turn["stages"]["brain_total"] = sum(r["s"] for r in requests)
+        if tools_run:
+            turn["stages"]["tool_exec"] = sum(t["s"] for t in tools_run)
+
         record = {
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "shape": turn.get("shape", ""),
             "said": (user_text or "")[:80],
             "stages": {k: round(v, 3) for k, v in turn["stages"].items()},
+            "requests": [{"provider": r["provider"], "s": round(r["s"], 3)}
+                         for r in requests],
+            "tools": [{"tool": t["tool"], "s": round(t["s"], 3)}
+                      for t in tools_run],
             "meta": turn["meta"],
         }
         _turns.append(record)
@@ -212,3 +272,92 @@ def table(records: list | None = None) -> str:
     for name in names:
         lines.append(f"  {name:<18} {LABELS.get(name, '')}")
     return "\n".join(lines)
+
+
+SHAPES = ["conversational", "single", "multi-step", "vision"]
+
+
+def per_turn_table(records: list | None = None) -> str:
+    """(A) One row per turn: what shape it was, who served it, every stage."""
+    records = turns() if records is None else records
+    if not records:
+        return "No turns measured yet."
+    names = _stage_names(records)
+    head = (f"{'#':>2}  {'shape':<14} {'reqs':>4} {'providers':<22} "
+            + "".join(f"{n[:9]:>10}" for n in names))
+    lines = [head, "-" * len(head)]
+    for i, record in enumerate(records, 1):
+        used = []
+        for request in record.get("requests", []):
+            if request["provider"] not in used:
+                used.append(request["provider"])
+        row = (f"{i:>2}  {record.get('shape', '')[:14]:<14} "
+               f"{len(record.get('requests', [])):>4} {','.join(used)[:22]:<22} ")
+        for name in names:
+            value = record["stages"].get(name)
+            row += f"{value * 1000:>10.0f}" if value is not None else f"{'-':>10}"
+        lines.append(row)
+    return "\n".join(lines)
+
+
+def by_shape_table(records: list | None = None) -> str:
+    """(B) Medians per stage, grouped by shape. Blending them would hide the
+    thing we're looking for: the stages differ by what kind of turn it is."""
+    records = turns() if records is None else records
+    if not records:
+        return "No turns measured yet."
+    names = _stage_names(records)
+    present = [s for s in SHAPES if any(r.get("shape") == s for r in records)]
+    present += sorted({r.get("shape", "") for r in records
+                       if r.get("shape") and r.get("shape") not in SHAPES})
+    head = f"{'stage':<18}" + "".join(f"{s[:13]:>15}" for s in present)
+    lines = [head, "-" * len(head)]
+    for name in names:
+        row = f"{name:<18}"
+        for label in present:
+            subset = [r for r in records if r.get("shape") == label]
+            mids = medians(subset)
+            row += (f"{mids[name] * 1000:>13.0f}ms" if name in mids
+                    else f"{'-':>15}")
+        lines.append(row)
+    counts = "  ".join(f"{s}={sum(1 for r in records if r.get('shape') == s)}"
+                       for s in present)
+    lines.append("")
+    lines.append(f"turns per shape: {counts}")
+    return "\n".join(lines)
+
+
+def tools_table(records: list | None = None) -> str:
+    """(C) Tool execution time, per tool name. This is the number that decides
+    whether a spoken acknowledgement while an action runs is worth having."""
+    records = turns() if records is None else records
+    seen: dict = {}
+    for record in records:
+        for entry in record.get("tools", []):
+            seen.setdefault(entry["tool"], []).append(entry["s"])
+    if not seen:
+        return ("No tools ran in these turns - so nothing to say yet about "
+                "whether an acknowledgement would earn its place.")
+    head = f"{'tool':<24}{'runs':>6}{'median':>10}{'min':>9}{'max':>9}"
+    lines = [head, "-" * len(head)]
+    for tool in sorted(seen, key=lambda t: -statistics.median(seen[t])):
+        values = seen[tool]
+        lines.append(f"{tool:<24}{len(values):>6}"
+                     f"{statistics.median(values) * 1000:>8.0f}ms"
+                     f"{min(values) * 1000:>7.0f}ms{max(values) * 1000:>7.0f}ms")
+    everything = [v for values in seen.values() for v in values]
+    lines.append("")
+    lines.append(f"across all {len(everything)} tool runs: "
+                 f"median {statistics.median(everything) * 1000:.0f}ms")
+    return "\n".join(lines)
+
+
+def full_report(records: list | None = None) -> str:
+    records = turns() if records is None else records
+    parts = [
+        "A) PER-TURN", "=" * 72, per_turn_table(records), "",
+        "B) MEDIANS BY SHAPE", "=" * 72, by_shape_table(records), "",
+        "C) TOOL EXECUTION", "=" * 72, tools_table(records), "",
+        "ALL TURNS BLENDED (for reference only)", "=" * 72, table(records),
+    ]
+    return "\n".join(parts)

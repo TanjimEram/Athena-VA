@@ -26,18 +26,26 @@ import time
 
 from athena import audio_io, brain, config, latency, stt, tts
 
-SUGGESTIONS = [
-    "what can you do",
-    "what's my battery level",
-    "what's the time",
-    "open notepad",
-    "tell me a fact about the moon",
+# The prescribed run: shapes differ, and blending their medians would hide
+# exactly what we're looking for. Each entry is (shape, what to say).
+SCRIPT = [
+    ("conversational", "what can you do"),
+    ("conversational", "how are you today"),
+    ("conversational", "tell me something about the moon"),
+    ("single", "what's my battery level"),
+    ("single", "open notepad"),
+    ("single", "open the BBC website"),
+    ("multi-step", "open notepad, check my battery, and search the web for lofi music"),
+    ("multi-step", "what's my battery, open calculator, and open google"),
+    ("multi-step", "check my system info, open notepad, and open the BBC website"),
+    ("vision", "look at my screen and tell me what you see"),
 ]
 
 
-def one_turn(index: int) -> bool:
+def one_turn(shape: str) -> bool:
     """Record, transcribe, think, speak. True if a turn was measured."""
     latency.start_turn()
+    latency.shape(shape)
 
     print("  listening... (speak now, stop when you're done)")
     wav = audio_io.record_until_silence(max_seconds=12)
@@ -76,8 +84,12 @@ def one_turn(index: int) -> bool:
     if record:
         print("  " + "  ".join(f"{k}={v * 1000:.0f}ms"
                                for k, v in record["stages"].items()))
-        if result["steps"]:
-            print(f"  ({len(result['steps'])} tool step(s) in that turn)")
+        providers_used = [r["provider"] for r in record.get("requests", [])]
+        if providers_used:
+            print(f"  {len(providers_used)} model call(s) via "
+                  f"{', '.join(providers_used)}")
+        for entry in record.get("tools", []):
+            print(f"  tool {entry['tool']}: {entry['s'] * 1000:.0f}ms")
     print()
     return True
 
@@ -104,19 +116,23 @@ if __name__ == "__main__":
     print("ready.\n")
 
     latency.clear()
+    plan = SCRIPT[:wanted] if wanted <= len(SCRIPT) else SCRIPT
+    print(f"The run is scripted so the shapes are labelled correctly:")
+    for i, (shape, say) in enumerate(plan, 1):
+        print(f"  {i:>2}. [{shape:<14}] {say!r}")
+    print("\nSay each one roughly as written. If a turn fails or falls back to")
+    print("another provider, it's kept and labelled - those are real conditions.\n")
+
     done = 0
-    attempt = 0
-    while done < wanted and attempt < wanted * 2:
-        attempt += 1
-        suggestion = SUGGESTIONS[done % len(SUGGESTIONS)]
+    for index, (shape, say) in enumerate(plan, 1):
         try:
-            input(f"turn {done + 1}/{wanted} - press Enter, then say something "
-                  f"(e.g. {suggestion!r}): ")
+            input(f"turn {index}/{len(plan)} [{shape}] - press Enter, "
+                  f"then say: {say!r}\n> ")
         except (EOFError, KeyboardInterrupt):
             print("\nstopping early.")
             break
         try:
-            if one_turn(done + 1):
+            if one_turn(shape):
                 done += 1
         except KeyboardInterrupt:
             print("\nstopping early.")
@@ -128,6 +144,8 @@ if __name__ == "__main__":
     print("=" * 72)
     print(f"RESULTS over {done} turn(s)")
     print("=" * 72)
-    print(latency.table())
+    print()
+    print(latency.full_report())
     print()
     print(f"Full log appended to {latency.LOG_PATH}")
+    print("Paste everything from 'A) PER-TURN' down.")

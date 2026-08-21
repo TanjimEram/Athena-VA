@@ -701,27 +701,37 @@ def _request(kwargs: dict, use_tools: bool):
     Providers in the chain go through the OpenAI SDK with their own base_url;
     _as_groq_error translates what they raise, so the handlers upstream keep
     catching rate limits unchanged."""
+    return _dispatch(kwargs, use_tools)
+
+
+def _timed_call(provider_name: str, make_call):
+    """Run one attempt and record how long it took, against the provider that
+    served it. In a finally, so an attempt that FAILS is measured too - a
+    slow failure is exactly the thing worth seeing in the table, and a turn
+    that fell through would otherwise read as an unexplained outlier.
+
+    There is no time-to-first-token to record separately: the call is
+    blocking, so the first token and the last arrive together."""
     import time as _time
     started = _time.monotonic()
     try:
-        return _dispatch(kwargs, use_tools)
+        return make_call()
     finally:
-        # Timing only, and in a finally so a call that FAILS is measured too -
-        # a slow failure is exactly the thing worth seeing in the table.
-        # There is no time-to-first-token to record separately: the call is
-        # blocking, so the first token and the last arrive together.
         try:
             from athena import latency
-            latency.mark("brain_total", _time.monotonic() - started)
+            latency.mark_request(provider_name, _time.monotonic() - started)
         except Exception:
             pass
 
 
 def _dispatch(kwargs: dict, use_tools: bool):
-    """The request itself. Split out only so the timing above can wrap both
-    paths without reaching into the fallback logic."""
+    """The request itself. Split out only so each attempt can be timed where
+    its provider is known, without reaching into the fallback logic."""
     if not config.PROVIDER_FALLBACK_ENABLED:
-        return config.get_groq_client().chat.completions.with_raw_response.create(**kwargs)
+        return _timed_call(
+            "groq",
+            lambda: config.get_groq_client().chat.completions
+            .with_raw_response.create(**kwargs))
 
     from athena import providers
 
@@ -748,7 +758,9 @@ def _dispatch(kwargs: dict, use_tools: bool):
         try:
             client = providers.client_for(provider)
             call = dict(kwargs, model=provider["model"])
-            response = client.chat.completions.with_raw_response.create(**call)
+            response = _timed_call(
+                provider["name"],
+                lambda: client.chat.completions.with_raw_response.create(**call))
             if provider is not chain[0] or first_error is not None:
                 _note_provider_switch(provider["name"])
             return response
@@ -1737,6 +1749,8 @@ def _handle_call(call, confirm, declined: set, ran_sigs: dict,
 def _execute_into(step: dict) -> None:
     """Run the step's skill, writing result/status into the step in place."""
     tool, args = step["tool"], step["args"]
+    import time as _time
+    _started = _time.monotonic()
     try:
         step["result"] = skills.SKILLS[tool](**args)
         step["status"] = "ran"
@@ -1747,6 +1761,15 @@ def _execute_into(step: dict) -> None:
             f"Tried to {tool.replace('_', ' ')} but it failed: "
             f"{type(exc).__name__}: {exc}."
         )
+    finally:
+        # The dead air between the model choosing an action and the result
+        # coming back. Nothing else measures it, and it decides whether a
+        # spoken acknowledgement is worth having at all.
+        try:
+            from athena import latency
+            latency.mark_tool(tool, _time.monotonic() - _started)
+        except Exception:
+            pass
 
 
 def _assistant_tool_msg(message) -> dict:

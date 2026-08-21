@@ -143,6 +143,11 @@ USAGE_VOICE_ALERTS = os.getenv("USAGE_VOICE_ALERTS", "").strip().lower() in (
 # Fraction of the per-minute token budget below which she mentions it.
 USAGE_WARN_AT = 0.25
 
+# Time every stage of a turn and write it to latency_log.jsonl. Measurement
+# only - it changes nothing about how anything runs. Set to 0 to switch off.
+LATENCY_TRACE = os.getenv("LATENCY_TRACE", "1").strip().lower() not in (
+    "0", "false", "no", "off")
+
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID")
 GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET")
 # Where the signed-in token is cached (gitignored). Per-machine, like

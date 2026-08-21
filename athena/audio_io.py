@@ -7,6 +7,7 @@ a fallback. Both return the path of a temp 16 kHz mono WAV file."""
 
 import os
 import tempfile
+import time
 from collections import deque
 
 import numpy as np
@@ -57,6 +58,7 @@ def record_until_silence(
     speech_started = False
     loud_run = 0
     silent_run = 0
+    last_speech_at = None
 
     try:
         with sd.InputStream(
@@ -103,17 +105,34 @@ def record_until_silence(
                     # Hysteresis: ending speech requires dropping well below
                     # the start threshold, so trailing soft syllables count.
                     if rms < threshold * 0.8:
+                        if silent_run == 0:
+                            # The last frame with speech in it. This, not the
+                            # moment the recorder stops, is when the user
+                            # finished talking - everything after it is the
+                            # wait we're measuring, so it anchors the total.
+                            last_speech_at = time.monotonic()
                         silent_run += 1
                         if silent_run >= silence_frames_needed:
                             break
                     else:
                         silent_run = 0
+                        last_speech_at = None
     except sd.PortAudioError as exc:
         print(f"{_MIC_HINT} ({exc})")
         return None
 
     if not speech_started:
         return None
+
+    # Timing only - guarded so a stopwatch can never cost us a recording.
+    try:
+        from athena import latency
+        if last_speech_at is not None:
+            latency.anchor("speech_ended", last_speech_at)
+            latency.mark("silence_wait", time.monotonic() - last_speech_at)
+    except Exception:
+        pass
+
     return _write_wav(np.concatenate(captured), samplerate)
 
 

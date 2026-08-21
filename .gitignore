@@ -15,3 +15,6 @@ settings.json
 
 # Google OAuth token (a live credential - grants access to Docs and Gmail)
 google_token.json
+
+# Per-run timing measurements
+latency_log.jsonl

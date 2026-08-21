@@ -9,10 +9,15 @@ from athena import config
 
 def transcribe(wav_path: str) -> str:
     """Turn a spoken WAV recording into text. Returns "" on failure."""
+    import time
+    started = time.monotonic()
+    payload_bytes = 0
     try:
         with open(wav_path, "rb") as f:
+            payload = f.read()
+            payload_bytes = len(payload)
             result = config.get_groq_client().audio.transcriptions.create(
-                file=(wav_path, f.read()),
+                file=(wav_path, payload),
                 model=config.STT_MODEL,
                 language="en",
             )
@@ -28,5 +33,15 @@ def transcribe(wav_path: str) -> str:
     except Exception as exc:
         print(f"[stt] Transcription failed: {exc}")
         return ""
+
+    # Timing only. This one number is connect + upload + inference together:
+    # the SDK does all three inside that call and doesn't report the split.
+    # wav_bytes goes alongside so upload size can at least be reasoned about.
+    try:
+        from athena import latency
+        latency.mark("stt", time.monotonic() - started)
+        latency.meta("wav_bytes", payload_bytes)
+    except Exception:
+        pass
 
     return (result.text or "").strip()

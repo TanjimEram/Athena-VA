@@ -698,9 +698,28 @@ def _request(kwargs: dict, use_tools: bool):
     changes here; nothing about the reply, the steps or the tool handling
     above it knows this function moved.
 
-    Every provider goes through the groq SDK with its own base_url, so a
-    429 anywhere still raises groq.RateLimitError and the existing handlers
-    upstream keep working unchanged."""
+    Providers in the chain go through the OpenAI SDK with their own base_url;
+    _as_groq_error translates what they raise, so the handlers upstream keep
+    catching rate limits unchanged."""
+    import time as _time
+    started = _time.monotonic()
+    try:
+        return _dispatch(kwargs, use_tools)
+    finally:
+        # Timing only, and in a finally so a call that FAILS is measured too -
+        # a slow failure is exactly the thing worth seeing in the table.
+        # There is no time-to-first-token to record separately: the call is
+        # blocking, so the first token and the last arrive together.
+        try:
+            from athena import latency
+            latency.mark("brain_total", _time.monotonic() - started)
+        except Exception:
+            pass
+
+
+def _dispatch(kwargs: dict, use_tools: bool):
+    """The request itself. Split out only so the timing above can wrap both
+    paths without reaching into the fallback logic."""
     if not config.PROVIDER_FALLBACK_ENABLED:
         return config.get_groq_client().chat.completions.with_raw_response.create(**kwargs)
 

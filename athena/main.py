@@ -95,6 +95,11 @@ def hear(max_seconds: float = 12, stop_event=None) -> str:
     aborts the recording early (used by the confirm race). `_stopping`
     (window close) always aborts too, so the mic is freed on shutdown."""
     ui.set_state("listening")
+    try:
+        from athena import latency
+        latency.start_turn()          # the clock starts before the mic opens
+    except Exception:
+        pass
     stop = stop_event if stop_event is not None else _stopping
     wav_path = audio_io.record_until_silence(
         max_seconds=max_seconds, on_level=_mic_level, stop_event=stop
@@ -248,6 +253,12 @@ def _do_turn(user_text: str) -> None:
         if first_sentence["pending"]:
             first_sentence["pending"] = False
             ui.set_state("speaking")
+            # The first word is audible about here - the far end of TOTAL.
+            try:
+                from athena import latency
+                latency.anchor("first_audio")
+            except Exception:
+                pass
         ui.add_transcript("athena", sentence)
 
     speak_started = time.monotonic()
@@ -255,6 +266,24 @@ def _do_turn(user_text: str) -> None:
         iter([reply]), on_level=ui.set_amplitude, on_sentence=_on_sentence
     )
     ui.set_amplitude(0)
+
+    # Close the turn's measurement here, before the optional extras below -
+    # a budget warning or a provider notice is not part of answering, and
+    # counting it would flatter or distort the number depending on the day.
+    try:
+        from athena import latency
+        if ttfa_ms is not None:
+            latency.mark("tts_first_audio", ttfa_ms / 1000.0)
+        record = latency.end_turn(user_text)
+        if record:
+            stages = record["stages"]
+            total = stages.get("total")
+            print("[latency] " + "  ".join(
+                f"{k}={v * 1000:.0f}ms" for k, v in stages.items()))
+            if total:
+                print(f"[latency] end of speech -> first word: {total * 1000:.0f}ms")
+    except Exception as exc:
+        print(f"[latency] couldn't close the turn: {exc!r}")
 
     # Budget warning, spoken only AFTER the reply has finished - speak_stream
     # has returned by here, so this can never cut across her own sentence.

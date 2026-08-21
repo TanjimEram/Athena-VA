@@ -92,6 +92,41 @@ reach_out(name, owner="") -> str
 refuses without an explicit yes — so nothing is ever sent autonomously. The
 message says only "can you check in on me", never what the user said.
 
+### athena/latency.py — where the time goes (MEASUREMENT ONLY)
+Times every stage of a turn and appends it to `latency_log.jsonl`
+(gitignored). Changes nothing about how anything runs; every entry point
+swallows its own errors, so a broken stopwatch can't break a conversation.
+Behind `config.LATENCY_TRACE` (default on; `LATENCY_TRACE=0` takes not a
+single mark).
+
+```python
+start_turn() / mark(stage, seconds) / anchor(name, ts=None) / meta(k, v)
+end_turn(user_text="") -> dict | None
+table(records=None) -> str      # per-turn columns plus a median
+medians() -> dict  /  turns() -> list  /  clear()
+```
+
+Marks are taken in four places: `audio_io` (the end-of-speech anchor and the
+silence wait), `stt` (call time + `wav_bytes`), `brain._request` (completion
+time, in a `finally` so a slow failure is measured too), and `main` (first
+audio, and closing the turn). No signature changed anywhere.
+
+**TOTAL is anchored on when the last loud frame was heard, not when the
+recorder stopped** — the wait through a pause is one of the stages being
+measured, so it belongs inside the total.
+
+Two rows are honest about what they can't separate. `stt` is connect, upload
+and inference together, because the SDK does all three in one opaque call.
+`brain_total` is also the time-to-first-token: **the live path does not
+stream.** `run_agent`'s completion call is blocking and `main` hands TTS the
+finished reply (`iter([reply])`), so synthesis cannot begin until the whole
+answer exists. `brain.think_stream` does stream but is dead code, superseded
+by `run_agent`. DEMO.md's claim that "the first sentence plays while the
+model is still writing" describes that dead path, not the live one.
+
+Measure with `python latency_test.py [n]` — the real pipeline minus the wake
+word, printing a per-stage table with medians.
+
 ### athena/providers.py — the fallback chain (DONE)
 When one provider's rate limit is hit, Athena falls through to the next
 instead of failing. `config.PROVIDERS` is the ordered chain; each entry is a

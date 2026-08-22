@@ -43,7 +43,16 @@ GOOGLE_TOKEN_FILE = os.path.join(
 )
 
 # Model names live here so swapping models is a one-line change.
-BRAIN_MODEL = "llama-3.3-70b-versatile"
+# Groq retired the Llama 3.x models - llama-3.3-70b-versatile 404s ("model
+# does not exist"). Verified against the live model list, August 2026.
+# openai/gpt-oss-120b replaces it and was measured selecting the right tool
+# with the right arguments on our real tool schema.
+# This is also settings.DEFAULTS["brain_model"], so leaving it stale meant
+# one click of "Reset defaults" in the dashboard would kill the assistant.
+# To re-check what's available:
+#   python -c "from athena import config; print([m.id for m in
+#              config.get_groq_client().models.list().data])"
+BRAIN_MODEL = "openai/gpt-oss-120b"
 
 # Voice for text-to-speech: Irish female, our FRIDAY sound.
 TTS_VOICE = "en-IE-EmilyNeural"

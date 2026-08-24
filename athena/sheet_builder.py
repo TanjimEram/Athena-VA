@@ -99,14 +99,18 @@ class SheetPlan:
     description: str = ""
     ranges: tuple = ()
     steps: tuple = ()
+    # export_requested is separate from export_path on purpose: .export()
+    # with no path is a real request with a path we work out later, and a
+    # None path alone cannot tell that apart from no export at all.
+    export_requested: bool = False
     export_path: str | None = None
     warnings: tuple = ()
 
     def __len__(self) -> int:
-        return len(self.requests) + (1 if self.export_path else 0)
+        return len(self.requests) + (1 if self.export_requested else 0)
 
     def is_empty(self) -> bool:
-        return not self.requests and not self.export_path
+        return not self.requests and not self.export_requested
 
 
 @dataclass
@@ -577,6 +581,7 @@ class SheetRequestBuilder:
             description=self._describe(),
             ranges=tuple(dict.fromkeys(ranges)),
             steps=tuple(s.says for s in self._steps),
+            export_requested=self._export is not None,
             export_path=(self._export[0] if self._export else None),
             warnings=tuple(self._warnings),
         )
@@ -792,6 +797,159 @@ class SheetRequestBuilder:
                     else "do nothing")
         action = parts[0] if len(parts) == 1 else ", then ".join(parts)
         return f"I'd {action}{where}.{tail}"
+
+
+# --------------------------------------------------------------------------
+# Execution.
+#
+# All or nothing, and most of that guarantee is the API's rather than ours:
+# spreadsheets.batchUpdate validates every request up front and applies none
+# of them if any is invalid. Every plan this module builds is exactly one
+# batchUpdate, so a half-applied plan is not a state the API will produce.
+#
+# We take the snapshot anyway, for two reasons. It is what makes the change
+# undoable afterwards, which the user needs whether or not anything went
+# wrong. And if the API ever does leave partial state, restoring is better
+# than discovering it later.
+#
+# The snapshot covers the WHOLE used range, not just the ranges the plan
+# names. A delete shifts every row beneath it, so "the rows we touched" is
+# not the same as "the rows that changed".
+# --------------------------------------------------------------------------
+
+def _used_a1(rows: int, columns: int) -> str:
+    return f"A1:{sheets._index_to_col(max(columns, 1) - 1)}{max(rows, 1)}"
+
+
+def snapshot_for(plan: SheetPlan, reader=None) -> dict | None:
+    """Everything the plan could disturb: values and formats across the used
+    range, plus the row and column counts so a restore can put the SHAPE
+    back too. None if it couldn't be read - in which case nothing should
+    run."""
+    reader = reader or LiveSheetReader()
+    try:
+        facts = reader.facts()
+    except Exception as exc:
+        print(f"[sheet_builder] couldn't read the sheet to snapshot it: {exc!r}")
+        return None
+    a1 = _used_a1(facts.row_count, facts.column_count)
+    snapshot = sheets._snapshot(a1)
+    if snapshot is None:
+        return None
+    snapshot["row_count"] = facts.row_count
+    snapshot["column_count"] = facts.column_count
+    return snapshot
+
+
+def _restore(snapshot: dict, reader=None, applier=None) -> bool:
+    """Put the sheet back. Handles the row count as well as the contents:
+    after a delete there are fewer rows than the snapshot describes, and
+    writing values into a shorter grid would silently lose the tail."""
+    applier = applier or sheets._apply
+    reader = reader or LiveSheetReader()
+    requests = []
+    try:
+        facts = reader.facts()
+        wanted = snapshot.get("row_count", 0)
+        have = facts.row_count
+        sheet_id = snapshot.get("grid", {}).get("sheetId", 0)
+        if wanted and have < wanted:
+            requests.append({"insertDimension": {"range": {
+                "sheetId": sheet_id, "dimension": "ROWS",
+                "startIndex": max(have, 0), "endIndex": wanted},
+                "inheritFromBefore": False}})
+        elif wanted and have > wanted:
+            requests.append({"deleteDimension": {"range": {
+                "sheetId": sheet_id, "dimension": "ROWS",
+                "startIndex": wanted, "endIndex": have}}})
+    except Exception as exc:
+        print(f"[sheet_builder] couldn't measure the sheet before restoring: {exc!r}")
+
+    requests.append({"updateCells": {
+        "rows": snapshot.get("rows", []),
+        "fields": "userEnteredValue,userEnteredFormat",
+        "range": snapshot.get("grid", {})}})
+    error = applier(requests, snapshot.get("spreadsheet_id", ""))
+    if error:
+        print(f"[sheet_builder] restore failed: {error}")
+        return False
+    return True
+
+
+def export_csv(plan: SheetPlan, reader=None) -> tuple[str | None, str]:
+    """Write the sheet out. (path, spoken fragment) - the path is None if it
+    couldn't be written, and the fragment says so rather than staying quiet."""
+    import csv
+    import os
+    reader = reader or LiveSheetReader()
+    path = plan.export_path
+    if not path:
+        title = (sheets.current().get("title") or plan.tab or "sheet").strip()
+        safe = "".join(c for c in title if c.isalnum() or c in " -_").strip()
+        folder = os.path.join(os.path.expanduser("~"), "Documents")
+        if not os.path.isdir(folder):
+            folder = os.path.expanduser("~")
+        path = os.path.join(folder, f"{safe or 'sheet'}.csv")
+    try:
+        rows = reader.values() or []
+        with open(path, "w", newline="", encoding="utf-8") as handle:
+            csv.writer(handle).writerows(rows)
+    except Exception as exc:
+        print(f"[sheet_builder] export failed: {exc!r}")
+        return None, " I couldn't save the CSV copy, though."
+    return path, f" I've saved a copy to {os.path.basename(path)}."
+
+
+def execute(plan: SheetPlan, reader=None, applier=None) -> str:
+    """Run a built plan, all of it or none of it. Returns one short honest
+    sentence, the way every skill does."""
+    applier = applier or sheets._apply
+
+    if plan.is_empty():
+        return "There was nothing in that plan to do, so I've left it alone."
+
+    # Nothing runs until we know we could put it back.
+    snapshot = snapshot_for(plan, reader)
+    if snapshot is None:
+        return ("I couldn't take a copy of the sheet first, so I've not "
+                "changed anything - I'd have had no way to undo it.")
+    if not sheets._push_undo(plan.description, snapshot):
+        return ("I couldn't save a way back, so I've not changed anything.")
+
+    error = applier(list(plan.requests), snapshot.get("spreadsheet_id", ""))
+    if error:
+        # batchUpdate is all-or-nothing, so this should mean nothing was
+        # applied. Restore anyway - writing identical data back costs one
+        # call and is the difference between believing that and knowing it.
+        sheets._undo_stack.pop()          # nothing happened; no phantom undo
+        restored = _restore(snapshot, reader, applier)
+        if restored:
+            return (f"That didn't work, so I've put the sheet back as it was. "
+                    f"Nothing was changed. The problem was: {error}")
+        return (f"That didn't work and I couldn't fully put the sheet back. "
+                f"Check it before doing anything else. The problem was: {error}")
+
+    said = _spoken_result(plan)
+    # Export LAST, and only after the changes landed. It writes a local file,
+    # which no rollback can take back - so a plan that failed must never
+    # leave one behind.
+    if plan.export_requested:
+        _path, fragment = export_csv(plan, reader)
+        said += fragment
+    return said
+
+
+def _spoken_result(plan: SheetPlan) -> str:
+    """What she says after it worked. Built from the plan's own steps, so it
+    describes what actually ran."""
+    count = len(plan.requests)
+    if plan.steps:
+        action = plan.steps[0] if len(plan.steps) == 1 else \
+            f"{len(plan.steps)} changes"
+    else:
+        action = f"{count} change{'s' if count != 1 else ''}"
+    where = f" on {plan.tab}" if plan.tab else ""
+    return f"Done - {action}{where}. Say undo if that wasn't right."
 
 
 class PlanDirector:

@@ -301,6 +301,145 @@ if __name__ == "__main__":
     check("still describes itself honestly", "0 rows" in plan.description,
           plan.description)
 
+    # ================= phase 3: atomic execution =================
+    import os
+    import tempfile
+
+    from athena.sheet_builder import _restore, execute
+
+    class ExecReader(FakeReader):
+        """Same fake sheet, but the row count can be varied to simulate the
+        drift a delete leaves behind."""
+
+        def __init__(self, rows: int = 6):
+            super().__init__(expect_backgrounds=True)
+            self.rows = rows
+
+        def facts(self):
+            return SheetFacts(tab="Data", sheet_id=0,
+                              headers=("Name", "Score", "City"),
+                              row_count=self.rows, column_count=3,
+                              tabs=(("Data", 0),))
+
+        def values(self):
+            return super().values()[:self.rows]
+
+    SNAP = {"spreadsheet_id": "SS", "spreadsheet_title": "T", "tab": "Data",
+            "a1": "A1:C6",
+            "grid": {"sheetId": 0, "startRowIndex": 0, "endRowIndex": 6,
+                     "startColumnIndex": 0, "endColumnIndex": 3},
+            "rows": [{"values": [{"userEnteredValue": {"stringValue": "x"}}]}],
+            "row_count": 6, "column_count": 3}
+    real_snapshot = sheets._snapshot
+    sheets._snapshot = lambda a1: dict(SNAP, a1=a1)
+
+    try:
+        print("\n=== execution: ONE batchUpdate, snapshot pushed ===")
+        sent = []
+        def ok_applier(reqs, ssid=""):
+            sent.append(list(reqs))
+            return None
+        sheets._clear_undo()
+        plan = (SheetRequestBuilder()
+                .delete_rows_where({"kind": COLOUR_PREDICATE, "colour": "orange"})
+                .resolve(ExecReader()).build())
+        said = execute(plan, ExecReader(), ok_applier)
+        check("exactly one API call", len(sent) == 1, str(len(sent)))
+        check("every request in that one call",
+              len(sent[0]) == len(plan.requests))
+        check("snapshot pushed so the user can undo", sheets.undo_depth() == 1)
+        check("the sentence offers undo", "undo" in said.lower(), said)
+
+        print("\n=== the snapshot is taken BEFORE anything is sent ===")
+        order = []
+        sheets._clear_undo()
+        sheets._snapshot = lambda a1: (order.append("snapshot"),
+                                       dict(SNAP, a1=a1))[1]
+        execute(SheetRequestBuilder().freeze(1).resolve(ExecReader()).build(),
+                ExecReader(), lambda r, s="": order.append("apply"))
+        check("snapshot first, then apply", order == ["snapshot", "apply"],
+              str(order))
+        sheets._snapshot = lambda a1: dict(SNAP, a1=a1)
+
+        print("\n=== failure rolls back, and leaves no phantom undo ===")
+        calls = []
+        def failing(reqs, ssid=""):
+            calls.append(reqs)
+            return None if len(calls) > 1 else "the spreadsheet refused that"
+        sheets._clear_undo()
+        said = execute(SheetRequestBuilder().delete_rows(3)
+                       .resolve(ExecReader()).build(), ExecReader(), failing)
+        print(f"    {said}")
+        check("said it didn't work", "didn't work" in said, said)
+        check("said the sheet was put back", "put the sheet back" in said, said)
+        check("carried the real reason", "refused" in said, said)
+        check("a restore call was made", len(calls) == 2, str(len(calls)))
+        check("no phantom undo entry", sheets.undo_depth() == 0,
+              str(sheets.undo_depth()))
+
+        print("\n=== when the restore ALSO fails, it says so plainly ===")
+        sheets._clear_undo()
+        said = execute(SheetRequestBuilder().delete_rows(3)
+                       .resolve(ExecReader()).build(), ExecReader(),
+                       lambda r, s="": "everything is on fire")
+        print(f"    {said}")
+        check("admits it couldn't fully restore", "couldn't fully put" in said)
+        check("tells the user to check", "check it" in said.lower())
+
+        print("\n=== restore repairs the ROW COUNT, not just contents ===")
+        seen = []
+        def capture(reqs, ssid=""):
+            seen.extend(reqs)
+            return None
+        _restore(SNAP, ExecReader(rows=3), capture)
+        kinds = [next(iter(r)) for r in seen]
+        check("pads the missing rows first", kinds[0] == "insertDimension",
+              str(kinds))
+        check("then rewrites the cells", "updateCells" in kinds, str(kinds))
+        span = seen[0]["insertDimension"]["range"]
+        check("pads 3 -> 6", (span["startIndex"], span["endIndex"]) == (3, 6),
+              str(span))
+        seen.clear()
+        _restore(SNAP, ExecReader(rows=9), capture)
+        check("trims when there are too many",
+              next(iter(seen[0])) == "deleteDimension", str(seen[0]))
+
+        print("\n=== no snapshot means nothing runs ===")
+        sheets._snapshot = lambda a1: None
+        ran = []
+        said = execute(SheetRequestBuilder().freeze(1).resolve(ExecReader()).build(),
+                       ExecReader(), lambda r, s="": ran.append(r))
+        check("nothing was sent", not ran, str(ran))
+        check("and it said why", "no way to undo" in said, said)
+        sheets._snapshot = lambda a1: dict(SNAP, a1=a1)
+
+        print("\n=== export runs last, and only on success ===")
+        good = os.path.join(tempfile.mkdtemp(), "out.csv")
+        sheets._clear_undo()
+        said = execute(SheetRequestBuilder().freeze(1).export(good)
+                       .resolve(ExecReader()).build(), ExecReader(), ok_applier)
+        check("file written on success", os.path.exists(good))
+        check("mentioned in the sentence", "saved a copy" in said, said)
+        if os.path.exists(good):
+            check("contents are the sheet",
+                  open(good).read().splitlines()[0] == "Name,Score,City")
+        never = os.path.join(tempfile.mkdtemp(), "never.csv")
+        sheets._clear_undo()
+        execute(SheetRequestBuilder().delete_rows(3).export(never)
+                .resolve(ExecReader()).build(), ExecReader(),
+                lambda r, s="": "nope")
+        check("a failed plan leaves NO file behind", not os.path.exists(never))
+
+        print("\n=== an empty plan is refused before anything ===")
+        ran = []
+        said = execute(SheetPlan(tab="Data", sheet_id=0), ExecReader(),
+                       lambda r, s="": ran.append(r))
+        check("nothing sent", not ran)
+        check("said so", "nothing in that plan" in said, said)
+    finally:
+        sheets._snapshot = real_snapshot
+        sheets._clear_undo()
+
     total, passed = len(results), sum(results)
     print(f"\n{passed}/{total} checks passed")
     sys.exit(0 if passed == total else 1)

@@ -1130,6 +1130,64 @@ def autosize_columns() -> str:
 # delete them in descending order. A plan can.
 # --------------------------------------------------------------------------
 
+# Things people ask a spreadsheet assistant for that these steps cannot do.
+# The step list deliberately covers fifteen operations rather than the sixty
+# request types raw JSON could name, so the gap is real and worth naming
+# precisely. "I couldn't see a way to do that" tells nobody what to try next.
+UNSUPPORTED_OPERATIONS = (
+    (("chart", "graph", "plot"),
+     "I can't make charts yet. I can sort, filter, colour, add formulas and "
+     "add or remove rows."),
+    (("pivot",),
+     "I can't build pivot tables. I can sort and filter, which covers some "
+     "of the same ground."),
+    (("conditional format", "conditional formatting", "colour scale",
+      "color scale", "heatmap", "heat map"),
+     "I can't set conditional formatting rules. I can colour rows that match "
+     "a condition right now, which sticks until you change it."),
+    (("merge", "unmerge"),
+     "I can't merge or unmerge cells."),
+    (("data validation", "dropdown", "drop down", "drop-down"),
+     "I can't add dropdowns or data validation."),
+    (("protect", "lock the", "unlock"),
+     "I can't protect or unlock ranges."),
+    (("note", "comment"),
+     "I can't add notes or comments to cells."),
+    (("image", "picture", "photo"),
+     "I can't put images into a sheet."),
+    (("rename", "new tab", "add a tab", "add a sheet", "delete the tab",
+      "duplicate the tab"),
+     "I can't add, rename or remove tabs. I can work within the one that's "
+     "open."),
+    (("pdf", "excel", "xlsx", "spreadsheet file"),
+     "I can only export as a CSV file."),
+    (("email", "send", "share"),
+     "I can't share or send a sheet from here."),
+    (("script", "macro", "apps script"),
+     "I can't write or run scripts."),
+    (("font", "bold", "italic", "text colour", "text color"),
+     "I can only change background colours, not fonts or text styling."),
+    (("border",),
+     "I can't set borders."),
+    (("row height", "column width", "resize the rows"),
+     "I can't set exact sizes. I can resize columns to fit their contents."),
+    (("undo everything", "undo all", "revert everything"),
+     "I can only undo one change at a time. Say undo again for the one "
+     "before it."),
+)
+
+
+def _unsupported_reason(request_text: str) -> str | None:
+    """Why we can't do this, specifically, when we can tell. Checked against
+    what the USER asked rather than what the model produced, because an
+    empty plan means the model already gave up."""
+    text = " ".join(str(request_text or "").lower().split())
+    for keywords, message in UNSUPPORTED_OPERATIONS:
+        if any(word in text for word in keywords):
+            return message
+    return None
+
+
 MAX_PLAN_STEPS = 10
 
 # step name -> (builder method, required args, optional args)
@@ -1375,6 +1433,13 @@ def apply_sheet_operation(natural_language_request: str) -> str:
     foreign = _foreign_reference(steps)
     if foreign:
         return foreign
+
+    # An empty plan means the model gave up. Say WHY when we can tell, from
+    # what was asked rather than from what came back - "I couldn't see a way
+    # to do that" leaves the user with nothing to try next.
+    if not steps:
+        return (_unsupported_reason(natural_language_request)
+                or "I couldn't see a way to do that, so I've changed nothing.")
 
     try:
         builder = _build_from_steps(steps)

@@ -10,7 +10,8 @@ import sys
 
 from athena import sheets
 from athena.sheet_builder import (COLOUR_PREDICATE, PlanDirector, PlanError,
-                                  SheetFacts, SheetPlan, SheetRequestBuilder)
+                                  SheetFacts, SheetPlan, SheetRequestBuilder,
+                                  match_colour_name)
 
 results = []
 
@@ -39,6 +40,42 @@ FACTS = SheetFacts(tab="Data", sheet_id=0,
 
 def b() -> SheetRequestBuilder:
     return SheetRequestBuilder(FACTS)
+
+
+# Real Google palette swatches, not our own colours - the whole point is
+# that a user's orange isn't ours.
+G_ORANGE = {"red": 0.988, "green": 0.898, "blue": 0.804}   # light orange 3
+G_RED = {"red": 0.957, "green": 0.800, "blue": 0.800}      # light red 3
+WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
+
+
+class FakeReader:
+    """Stands in for the live sheet. Rows 2 and 4 (0-based 1 and 3) are
+    orange, row 3 is red. Raises if backgrounds() is fetched when no
+    predicate needed it."""
+
+    def __init__(self, expect_backgrounds: bool = True):
+        self._expect = expect_backgrounds
+
+    def facts(self):
+        return SheetFacts(tab="Data", sheet_id=0,
+                          headers=("Name", "Score", "City"),
+                          row_count=6, column_count=3, tabs=(("Data", 0),))
+
+    def values(self):
+        return [["Name", "Score", "City"],
+                ["Ada", "90", "London"],
+                ["Linus", "70", "Helsinki"],
+                ["Grace", "85", "New York"],
+                ["Alan", "55", "Cambridge"],
+                ["Edsger", "", "Rotterdam"]]
+
+    def backgrounds(self):
+        if not self._expect:
+            raise AssertionError("backgrounds() fetched when nothing asked "
+                                 "about colour")
+        return [[WHITE] * 3, [G_ORANGE] * 3, [G_RED] * 3,
+                [G_ORANGE] * 3, [WHITE] * 3, [WHITE] * 3]
 
 
 if __name__ == "__main__":
@@ -175,6 +212,94 @@ if __name__ == "__main__":
     check("path carried on the plan", plan.export_path == "out.csv")
     check("no export request in the API body",
           all("export" not in next(iter(r)).lower() for r in plan.requests))
+
+    # ================= phase 2: resolution =================
+    print("\n=== colour classifier vs REAL Google palette swatches ===")
+    swatches = [
+        ("light orange 3", (0.988, 0.898, 0.804), "orange"),
+        ("orange #FF9900", (1.0, 0.6, 0.0), "orange"),
+        ("light orange 2", (0.976, 0.796, 0.612), "orange"),
+        ("light red 3", (0.957, 0.8, 0.8), "red"),
+        ("red #FF0000", (1.0, 0.0, 0.0), "red"),
+        ("light yellow 3", (1.0, 0.949, 0.8), "yellow"),
+        ("light green 3", (0.851, 0.918, 0.827), "green"),
+        ("light blue 3", (0.812, 0.886, 0.953), "blue"),
+        ("light grey 2", (0.8, 0.8, 0.8), "grey"),
+        ("dark grey #666", (0.4, 0.4, 0.4), "grey"),
+        ("WHITE (unset)", (1.0, 1.0, 1.0), None),
+        ("black", (0.0, 0.0, 0.0), None),
+        ("purple", (0.6, 0.0, 1.0), None),
+    ]
+    for name, (r, g, bl), want in swatches:
+        got = match_colour_name({"red": r, "green": g, "blue": bl})
+        check(f"{name:<16} -> {got}", got == want, f"wanted {want}")
+    check("no background at all -> None", match_colour_name(None) is None)
+    for name, rgb in sorted(sheets.COLORS.items()):
+        check(f"our own {name} classifies as itself",
+              match_colour_name(rgb) == name)
+
+    print("\n=== the demo failure: delete rows coloured orange ===")
+    plan = (SheetRequestBuilder()
+            .delete_rows_where({"kind": COLOUR_PREDICATE, "colour": "orange"})
+            .resolve(FakeReader()).build())
+    starts = [r["deleteDimension"]["range"]["startIndex"] for r in plan.requests]
+    check("found both orange rows", sorted(starts) == [1, 3], str(starts))
+    check("emitted descending", starts == sorted(starts, reverse=True), str(starts))
+    check("header row never matched", 0 not in starts)
+    check("count in the description", "2 rows" in plan.description, plan.description)
+    print(f"    {plan.description}")
+
+    print("\n=== value predicates resolve to the right rows ===")
+    for kind, col, val, want in [("greater than", "Score", 75, [1, 3]),
+                                 ("less than", "Score", 75, [2, 4]),
+                                 ("equals", "City", "london", [1]),
+                                 ("contains", "City", "new", [3]),
+                                 ("empty", "Score", "", [5])]:
+        plan = (SheetRequestBuilder()
+                .delete_rows_where({"kind": kind, "column": col, "value": val})
+                .resolve(FakeReader(expect_backgrounds=False)).build())
+        rows = sorted(r["deleteDimension"]["range"]["startIndex"]
+                      for r in plan.requests)
+        check(f"{kind} {col} {val!r} -> {want}", rows == want, str(rows))
+
+    print("\n=== the colour grid is only fetched when something asks ===")
+    SheetRequestBuilder().delete_rows_where(
+        {"kind": "greater than", "column": "Score", "value": 75}
+    ).resolve(FakeReader(expect_backgrounds=False)).build()
+    check("value-only plan never fetched backgrounds", True)
+
+    print("\n=== highlight_where resolves the same way ===")
+    plan = (SheetRequestBuilder().highlight_where("Score", "greater than", 75, "green")
+            .resolve(FakeReader(expect_backgrounds=False)).build())
+    check("one repeatCell per matching row", len(plan.requests) == 2)
+    check("all are repeatCell", all("repeatCell" in r for r in plan.requests))
+
+    print("\n=== resolve refreshes facts, so build validates for real ===")
+    raises("unknown column caught after resolve",
+           lambda: SheetRequestBuilder().sort("Revenue", "asc")
+           .resolve(FakeReader(expect_backgrounds=False)).build(),
+           "no column called Revenue")
+    raises("row past the real end caught after resolve",
+           lambda: SheetRequestBuilder().delete_rows(99)
+           .resolve(FakeReader(expect_backgrounds=False)).build(),
+           "past the end")
+
+    print("\n=== unsupported predicates each say WHY ===")
+    for kind, expect in [("font colour", "only by background"),
+                         ("bold", "whether the text is bold"),
+                         ("conditional formatting", "conditional-formatting"),
+                         ("merged", "whether their cells are merged"),
+                         ("formula", "not the formula behind it")]:
+        raises(f"{kind}", lambda k=kind: SheetRequestBuilder().delete_rows_where(
+            {"kind": k, "column": "Score"}), expect)
+
+    print("\n=== matching nothing is not an error ===")
+    plan = (SheetRequestBuilder()
+            .delete_rows_where({"kind": COLOUR_PREDICATE, "colour": "blue"})
+            .resolve(FakeReader()).build())
+    check("no requests emitted", plan.requests == ())
+    check("still describes itself honestly", "0 rows" in plan.description,
+          plan.description)
 
     total, passed = len(results), sum(results)
     print(f"\n{passed}/{total} checks passed")

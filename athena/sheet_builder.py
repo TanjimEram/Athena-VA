@@ -30,7 +30,8 @@ two. It is called with an explicit sheet_id and a bare range (tab prefixes
 stripped here first), because that function will otherwise look a tab name
 up over the network, and nothing here is allowed to touch the network."""
 
-from dataclasses import dataclass, field
+import colorsys
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from athena import sheets
@@ -125,6 +126,155 @@ class _Step:
 # one is separate because it inspects formatting rather than values.
 VALUE_PREDICATES = ("equals", "contains", "greater than", "less than", "empty")
 COLOUR_PREDICATE = "background colour"
+
+# Properties people ask to match on that we cannot. Each gets its own
+# sentence, because "I couldn't see a way to do that" tells nobody anything.
+UNSUPPORTED_PREDICATES = {
+    "font colour": "I can't match rows by font colour, only by background.",
+    "text colour": "I can't match rows by text colour, only by background.",
+    "bold": "I can't match rows by whether the text is bold.",
+    "italic": "I can't match rows by whether the text is italic.",
+    "font": "I can't match rows by which font they use.",
+    "border": "I can't match rows by their borders.",
+    "note": "I can't match rows by the notes attached to cells.",
+    "comment": "I can't match rows by the comments on them.",
+    "formula": "I can only match on what a cell shows, not the formula behind it.",
+    "conditional formatting": ("I can't tell a conditional-formatting colour "
+                               "from one someone applied by hand."),
+    "merged": "I can't match rows by whether their cells are merged.",
+    "hidden": "I can't match rows by whether they're hidden.",
+}
+
+# --------------------------------------------------------------------------
+# Colour matching.
+#
+# A user's "orange" is whatever they clicked in Google's palette, which is
+# not our orange. Matching has to tolerate that without confusing orange
+# with red.
+#
+# Plain RGB distance cannot do it. Measured against our own palette, orange
+# sits 0.103 from red and 0.112 from yellow - so any threshold loose enough
+# to accept a user's shade is also loose enough to confuse the three. Tested
+# on five real Google palette swatches, nearest-RGB got two wrong: #FF9900
+# came out "yellow", and light yellow came out "orange".
+#
+# Hue got all five right, so that is what we match on:
+#   * a cell with saturation below ACHROMATIC_SAT has no meaningful hue. It
+#     counts as grey - unless it is nearly white, which is just an uncoloured
+#     cell and must never match anything.
+#   * otherwise, take the NEAREST palette hue rather than testing a fixed
+#     tolerance: our hues are unevenly spaced (orange and yellow are 21
+#     degrees apart, red and orange 30) so one threshold cannot suit all.
+#   * reject anything further than MAX_HUE_DISTANCE from every palette hue,
+#     so a purple cell doesn't get called blue.
+# --------------------------------------------------------------------------
+# Both numbers were set by testing against real Google palette swatches, not
+# picked by eye. Google's pale tints are far less saturated than ours: their
+# light green 3 measures 0.099, so a cutoff of 0.12 read it as grey. Their
+# pale greens are also yellower than ours - 104 degrees against our 150 - so
+# a 40 degree bound rejected it outright.
+ACHROMATIC_SAT = 0.06       # below this there is no hue worth reading
+NEAR_WHITE_VAL = 0.95       # at or above this an uncoloured cell, not grey
+MIN_GREY_VAL = 0.25         # below this it is near-black, not a grey anyone
+                            # means; 0.45 was rejecting a plain #666666
+MAX_HUE_DISTANCE = 55.0     # degrees; beyond this it is not one of ours
+                            # (purple lands 65 from blue, so still rejected)
+
+
+def _hsv(rgb: dict) -> tuple:
+    return colorsys.rgb_to_hsv(float(rgb.get("red", 0.0)),
+                               float(rgb.get("green", 0.0)),
+                               float(rgb.get("blue", 0.0)))
+
+
+def _hue_gap(a: float, b: float) -> float:
+    """Degrees between two hues, the short way round the circle."""
+    gap = abs(a - b) % 360.0
+    return min(gap, 360.0 - gap)
+
+
+def match_colour_name(rgb: dict | None) -> str | None:
+    """Which of our named colours this cell is, or None for uncoloured.
+
+    Exposed rather than private because it is the piece most likely to need
+    tuning against a real sheet, and it is worth being able to test on its
+    own."""
+    if not rgb:
+        return None                      # unset background: never a match
+    hue, sat, val = _hsv(rgb)
+    if sat < ACHROMATIC_SAT:
+        if val >= NEAR_WHITE_VAL or val < MIN_GREY_VAL:
+            return None                  # white/unset, or near-black
+        return "grey" if "grey" in sheets.COLORS else None
+
+    degrees = hue * 360.0
+    best, best_gap = None, None
+    for name, palette in sheets.COLORS.items():
+        p_hue, p_sat, _ = _hsv(palette)
+        if p_sat < ACHROMATIC_SAT:
+            continue                     # grey has no hue to compare against
+        gap = _hue_gap(degrees, p_hue * 360.0)
+        if best_gap is None or gap < best_gap:
+            best, best_gap = name, gap
+    if best is None or best_gap > MAX_HUE_DISTANCE:
+        return None
+    return best
+
+
+class LiveSheetReader:
+    """Reads the open sheet through sheets.py. The one thing in this module
+    that talks to Google, and it is only ever called from resolve() - never
+    while steps are being chained.
+
+    Kept behind this small surface so the builder can be resolved against a
+    stub in tests without any network."""
+
+    def facts(self) -> SheetFacts:
+        current = sheets.current()
+        rows, cols = sheets._used_extent()
+        headers = tuple(str(h) for h in sheets._headers())
+        tabs = tuple((t.get("title", ""), t.get("sheetId"))
+                     for t in sheets._tabs())
+        return SheetFacts(tab=current.get("tab", ""),
+                          sheet_id=current.get("sheet_id") or 0,
+                          headers=headers, row_count=rows,
+                          column_count=cols, tabs=tabs)
+
+    def values(self) -> list:
+        """Every used cell on the tab, as text."""
+        return sheets._values(sheets.current().get("tab", "")) or []
+
+    def backgrounds(self) -> list:
+        """The background colour of every used cell, as a grid matching
+        values(). effectiveFormat, not userEnteredFormat: we want the colour
+        actually on screen, which is what the user was looking at when they
+        said "the orange ones"."""
+        service = sheets._service()
+        if service is None:
+            raise PlanError(google_auth_message())
+        tab = sheets.current().get("tab", "")
+        try:
+            response = service.spreadsheets().get(
+                spreadsheetId=sheets.current().get("id", ""),
+                ranges=[tab], includeGridData=True,
+                fields=("sheets(data(rowData(values("
+                        "effectiveFormat.backgroundColor))))")).execute()
+        except Exception as exc:
+            raise PlanError("I couldn't read the cell colours from that "
+                            f"sheet: {sheets.google_auth._short(exc)}")
+        tabs = response.get("sheets", [])
+        data = (tabs[0].get("data", [{}])[0] if tabs else {})
+        grid = []
+        for row in data.get("rowData", []) or []:
+            grid.append([
+                (cell.get("effectiveFormat", {}) or {}).get("backgroundColor")
+                for cell in (row.get("values", []) or [])])
+        return grid
+
+
+def google_auth_message() -> str:
+    from athena import google_auth
+    return google_auth.not_connected_message()
 
 
 class SheetRequestBuilder:
@@ -274,6 +424,118 @@ class SheetRequestBuilder:
         self._export = (path, fmt)
         return self
 
+    # -------------------------------------------------------------- resolve
+
+    def resolve(self, reader=None) -> "SheetRequestBuilder":
+        """Look at the sheet and turn predicates into concrete row numbers.
+
+        This is the ONLY step that reads from Google, and it sits between
+        chaining and build() on purpose: a predicate like "the orange ones"
+        cannot become a row list until someone has looked, and build() must
+        not be the thing that looks - it validates, and validation should
+        not have side effects.
+
+        Also refreshes SheetFacts, so build()'s column and row checks are
+        made against the real sheet rather than whatever was passed in."""
+        reader = reader or LiveSheetReader()
+
+        try:
+            self._facts = reader.facts()
+        except PlanError:
+            raise
+        except Exception as exc:
+            raise PlanError("I couldn't read that sheet, so I've not changed "
+                            f"anything: {exc}")
+        if not self._tab:
+            self._tab = self._facts.tab
+        if self._facts.sheet_id is not None:
+            resolved = self._facts.sheet_id_for(self._tab)
+            self._sheet_id = (resolved if resolved is not None
+                              else self._facts.sheet_id)
+
+        pending = [s for s in self._steps if s.needs_resolution]
+        if not pending:
+            return self
+
+        values = reader.values() or []
+        # Only pay for the colour grid if something actually asks about it.
+        backgrounds = None
+        if any(self._predicate_of(s).get("kind") == COLOUR_PREDICATE
+               for s in pending):
+            backgrounds = reader.backgrounds() or []
+
+        for step in pending:
+            rows = self._rows_matching(self._predicate_of(step), values,
+                                       backgrounds)
+            step.resolved_rows = tuple(sorted(rows))
+            step.says = f"{step.says} ({len(rows)} row"\
+                        f"{'s' if len(rows) != 1 else ''})"
+        return self
+
+    def _predicate_of(self, step: _Step) -> dict:
+        """Both predicate-bearing steps, read the same way - one is written
+        as a predicate dict, the other as loose column/condition/value."""
+        if "predicate" in step.args:
+            return step.args["predicate"]
+        return {"kind": step.args.get("condition"),
+                "column": step.args.get("column"),
+                "value": step.args.get("value")}
+
+    def _rows_matching(self, predicate: dict, values: list,
+                       backgrounds: list | None) -> list:
+        """0-based sheet row indices matching a predicate. Row 0 is the
+        header and is never matched - deleting the header because it happened
+        to be coloured would be a nasty surprise."""
+        kind = predicate.get("kind")
+
+        if kind == COLOUR_PREDICATE:
+            wanted = str(predicate.get("colour", "")).strip().lower()
+            wanted = sheets.COLOR_ALIASES.get(wanted, wanted)
+            if backgrounds is None:
+                raise PlanError("I couldn't read the cell colours, so I've "
+                                "not changed anything.")
+            matched = []
+            for index, row in enumerate(backgrounds):
+                if index == 0:
+                    continue
+                names = [match_colour_name(cell) for cell in row if cell]
+                names = [n for n in names if n]
+                # A row counts as coloured when the colour is what the row
+                # actually looks like - the most common colour across its
+                # filled cells, not merely present in one of them.
+                if names and max(set(names), key=names.count) == wanted:
+                    matched.append(index)
+            return matched
+
+        key = sheets._resolve_condition(kind)
+        if key is None:
+            message = UNSUPPORTED_PREDICATES.get(str(kind).strip().lower())
+            raise PlanError(message or f"I can't match rows by {kind}.")
+
+        index = self._facts.column_index(predicate.get("column"))
+        if index is None:
+            known = ", ".join(h for h in self._facts.headers if h) or "none"
+            raise PlanError(f"There's no column called "
+                            f"{predicate.get('column')} in this sheet. "
+                            f"The columns are {known}.")
+
+        test = sheets.CONDITIONS[key][1]
+        raw = predicate.get("value", "")
+        want = ("" if key in sheets.VALUELESS_CONDITIONS
+                else (raw if key in sheets.NUMERIC_CONDITIONS
+                      else str(raw).strip().lower()))
+        matched = []
+        for row_index, row in enumerate(values):
+            if row_index == 0:
+                continue
+            cell = str(row[index]) if index < len(row) else ""
+            try:
+                if test(cell, want):
+                    matched.append(row_index)
+            except Exception:
+                continue
+        return matched
+
     # ---------------------------------------------------------------- build
 
     def build(self) -> SheetPlan:
@@ -356,7 +618,11 @@ class SheetRequestBuilder:
                     f"I can do {', '.join(sorted(sheets.COLORS))}.")
             return
         if sheets._resolve_condition(kind) is None:
-            raise PlanError(f"I can't match rows by {kind}.")
+            # Say WHY, specifically, when we know why. Refused at chaining
+            # time rather than at resolve, so nothing is read from the sheet
+            # for a plan that was never going to run.
+            raise PlanError(UNSUPPORTED_PREDICATES.get(str(kind).strip().lower())
+                            or f"I can't match rows by {kind}.")
         if not predicate.get("column"):
             raise PlanError("Tell me which column to match on.")
 

@@ -494,6 +494,64 @@ providers can never leave the feature broken.
 Verify with `python sheets_provider_test.py` (add a URL to also generate a
 real body on each provider). Writes nothing.
 
+### athena/sheet_builder.py — assembling multi-stage changes (DONE)
+Builder pattern. A multi-stage spreadsheet change is assembled, validated in
+full, described in plain English, then executed all at once or not at all.
+Written because "delete all the rows that are coloured orange" needs three
+stages — read the formats, decide which rows match, delete them DESCENDING so
+an earlier delete doesn't shift a later one — and one batchUpdate can't
+express that.
+
+```python
+SheetRequestBuilder(facts=None)   # ConcreteBuilder; no API calls while chaining
+  .on_sheet(tab)  .sort(column, order, a1_range=None)
+  .filter(column, condition, value)  .clear_filter()
+  .colour(a1_range, colour)  .highlight_where(column, condition, value, colour)
+  .insert_rows(at, count)  .delete_rows(start, end)  .delete_rows_where(predicate)
+  .insert_columns(at, count)  .delete_columns(start, end)
+  .move_rows(from_start, from_end, to_index)
+  .set_formula(cell, formula)  .freeze(rows)  .autosize()  .export(path)
+  .resolve(reader=None) -> self    # the ONLY step that reads the sheet
+  .build() -> SheetPlan            # validates, or raises PlanError
+
+SheetPlan          # Product: frozen, every field a tuple
+SheetFacts         # headers, row/column counts - no network needed
+PlanDirector.tidy / clean_rows_by_colour / report
+execute(plan, reader=None, applier=None) -> str
+snapshot_for(plan) / _restore(snapshot) / export_csv(plan)
+match_colour_name(rgb) -> str | None
+```
+
+**A1 conversion is DELEGATED** to `sheets._a1_to_grid` rather than duplicated,
+so one implementation exists in the codebase. The tab prefix is stripped first
+and an explicit `sheet_id` passed, because that function looks an unfamiliar
+tab name up over the network and chaining must never touch it.
+
+**Colour matching is by HUE, not RGB distance.** Palette entries sit only
+0.103 apart in RGB (orange/red), so any threshold loose enough for a user's
+own shade also confuses them — measured against real Google swatches,
+nearest-RGB got two of five wrong. Nearest palette hue; saturation below 0.06
+is grey, or nothing when near-white; beyond 55° is rejected. Asking for a
+colour that isn't present reports which colours **are**.
+
+**Execution is all-or-nothing**, and most of that guarantee is the API's:
+`batchUpdate` validates every request up front and applies none if any is
+invalid. Every plan is exactly one batchUpdate. The snapshot still makes a
+successful change undoable, and on failure the sheet is restored anyway —
+including its row COUNT, since a delete leaves the grid shorter.
+
+`sheets.apply_sheet_operation` now asks the model for a **structured plan** —
+a list of named steps — which our code translates into builder calls, so an
+invented step or a bad argument is rejected here rather than sent to Google.
+All thirteen mutating named operations are thin wrappers over the same builder
+via `sheets._via_builder`, so there is one code path rather than two.
+
+Verify with `python sheet_builder_test.py` (119 checks, offline) and
+`python sheet_builder_live_test.py <url>` (19 checks on a scratch tab it
+creates and deletes).
+
+Patterns used across the project are recorded in **docs/design-patterns.md**.
+
 ### athena/memory.py — long-term memory (DONE)
 Supabase (free cloud Postgres) `interactions` table; the schema SQL is in
 memory.py's docstring. brain.think logs every exchange (async, so it never

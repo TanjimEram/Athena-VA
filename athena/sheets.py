@@ -763,9 +763,35 @@ def _dim_range(start: int, end: int, dimension: str = "ROWS",
             "endIndex": end}
 
 
+def _tab_values(tab: str = "") -> list:
+    """Every used cell on a tab.
+
+    Not _values(): there the argument is a RANGE, and _qualify prefixes it
+    with the current tab - so asking for "Sheet1" became "Sheet1!Sheet1",
+    which the API rejects. That silently returned nothing, which made
+    _used_extent report 0 x 0 and quietly shrank the filter, the highlight,
+    the autosize and - worst - the escape hatch's undo snapshot down to a
+    single cell. Here the tab name IS the range, so it goes through
+    untouched."""
+    service = _service()
+    if service is None or not _current["id"]:
+        return []
+    name = tab or _current["tab"]
+    if not name:
+        return []
+    safe = f"'{name}'" if re.search(r"[^A-Za-z0-9_]", name) else name
+    try:
+        result = service.spreadsheets().values().get(
+            spreadsheetId=_current["id"], range=safe).execute()
+        return result.get("values", []) or []
+    except Exception as exc:
+        print(f"[sheets] couldn't read the tab {name!r}: {google_auth._short(exc)}")
+        return []
+
+
 def _used_extent() -> tuple[int, int]:
     """(rows, columns) actually in use on the current tab."""
-    rows = _values(_current["tab"]) or []
+    rows = _tab_values() or []
     return len(rows), (max((len(r) for r in rows), default=0))
 
 
@@ -802,102 +828,51 @@ def _mutate(label: str, snapshot: dict | None, requests: list,
 # named operations
 # --------------------------------------------------------------------------
 
-def sort_range(a1_range: str, column, order: str = "asc") -> str:
-    """Sort a range by one column. The range is A1 notation and is sorted
-    exactly as given - include the header row only if you want it sorted."""
+def _via_builder(configure, what: str = 'that change') -> str:
+    """Run one named operation through the builder.
+
+    Every mutating named operation goes through here, so there is one code
+    path rather than two: the same validation, the same snapshot, the same
+    all-or-nothing execution and the same undo entry that the escape hatch
+    gets."""
+    from athena.sheet_builder import PlanError, SheetRequestBuilder, execute
     if _service() is None:
         return google_auth.not_connected_message()
     complaint = _need_sheet()
     if complaint:
         return complaint
-
     try:
-        grid = _bounded(_a1_to_grid(a1_range))
-    except ValueError:
-        return f"I couldn't make sense of the range {a1_range}."
+        builder = SheetRequestBuilder()
+        configure(builder)
+        builder.resolve()
+        plan = builder.build()
+    except PlanError as exc:
+        return str(exc)
+    except Exception as exc:
+        print(f"[sheets] couldn't plan {what}: {exc!r}")
+        return f"I couldn't work out how to {what}, so I've changed nothing."
+    return execute(plan)
 
-    index, name = _resolve_column(column)
-    if index is None:
-        return f"I couldn't work out which column {column} is."
 
-    descending = str(order or "").lower().startswith(("desc", "z", "high", "big"))
-    request = {"sortRange": {
-        "range": grid,
-        "sortSpecs": [{"dimensionIndex": index,
-                       "sortOrder": "DESCENDING" if descending else "ASCENDING"}],
-    }}
-    direction = "descending" if descending else "ascending"
-    return _mutate(f"the sort of {a1_range}", _snapshot(a1_range), [request],
-                   f"Sorted {a1_range} by {name}, {direction}.")
+def sort_range(a1_range: str, column, order: str = "asc") -> str:
+    """Sort a range by one column. The range is A1 notation and is sorted
+    exactly as given - include the header row only if you want it sorted."""
+    return _via_builder(lambda b: b.sort(column, order, a1_range=a1_range),
+                        "sort that")
 
 
 def color_range(a1_range: str, color_name: str) -> str:
     """Fill a range with a named background colour."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
-
-    color = _resolve_color(color_name)
-    if color is None:
-        return (f"I don't know the colour {color_name}. I can do "
-                f"{_color_names()}.")
-    try:
-        grid = _bounded(_a1_to_grid(a1_range))
-    except ValueError:
-        return f"I couldn't make sense of the range {a1_range}."
-
-    request = {"repeatCell": {
-        "range": grid,
-        "cell": {"userEnteredFormat": {"backgroundColor": color}},
-        "fields": "userEnteredFormat.backgroundColor",
-    }}
-    return _mutate(f"the colouring of {a1_range}", _snapshot(a1_range),
-                   [request], f"Coloured {a1_range} {color_name}.")
+    return _via_builder(lambda b: b.colour(a1_range, color_name),
+                        "colour that")
 
 
 def highlight_rows_where(column, condition: str, value: str,
                          color_name: str) -> str:
     """Colour every row whose column matches a condition."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
-
-    color = _resolve_color(color_name)
-    if color is None:
-        return (f"I don't know the colour {color_name}. I can do "
-                f"{_color_names()}.")
-    key = _resolve_condition(condition)
-    if key is None:
-        return f"I don't know how to test for {condition}."
-    index, name = _resolve_column(column)
-    if index is None:
-        return f"I couldn't work out which column {column} is."
-
-    matches = _matching_rows(index, key, value)
-    if matches is None:
-        return "I couldn't read the sheet to find matching rows."
-    if not matches:
-        return f"No rows where {name} {key} {value}, so I've left it alone."
-
-    rows, cols = _used_extent()
-    cols = max(cols, 1)
-    a1 = f"A1:{_index_to_col(cols - 1)}{max(rows, 1)}"
-    requests = [{"repeatCell": {
-        "range": {"sheetId": _current["sheet_id"],
-                  "startRowIndex": r, "endRowIndex": r + 1,
-                  "startColumnIndex": 0, "endColumnIndex": cols},
-        "cell": {"userEnteredFormat": {"backgroundColor": color}},
-        "fields": "userEnteredFormat.backgroundColor",
-    }} for r in matches]
-
-    count = len(matches)
-    return _mutate("that highlighting", _snapshot(a1), requests,
-                   f"Highlighted {count} row{'s' if count != 1 else ''} "
-                   f"where {name} {key} {value}, in {color_name}.")
+    return _via_builder(
+        lambda b: b.highlight_where(column, condition, value, color_name),
+        "highlight those rows")
 
 
 def _matching_rows(index: int, key: str, value) -> list | None:
@@ -980,89 +955,35 @@ def _filter_undo() -> dict:
 
 def filter_rows(column, condition: str, value: str = "") -> str:
     """Set the tab's basic filter to show only matching rows."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
-
-    key = _resolve_condition(condition)
-    if key is None:
-        return f"I don't know how to filter by {condition}."
-    index, name = _resolve_column(column)
-    if index is None:
-        return f"I couldn't work out which column {column} is."
-
-    condition_body = {"type": CONDITIONS[key][0]}
-    if key not in VALUELESS_CONDITIONS:
-        condition_body["values"] = [{"userEnteredValue": str(value)}]
-
-    rows, cols = _used_extent()
-    request = {"setBasicFilter": {"filter": {
-        "range": {"sheetId": _current["sheet_id"],
-                  "startRowIndex": 0, "endRowIndex": max(rows, 1),
-                  "startColumnIndex": 0, "endColumnIndex": max(cols, 1)},
-        "filterSpecs": [{"columnIndex": index,
-                         "filterCriteria": {"condition": condition_body}}],
-    }}}
-    tail = "" if key in VALUELESS_CONDITIONS else f" {value}"
-    return _mutate("that filter", _filter_undo(), [request],
-                   f"Filtered to rows where {name} {key}{tail}.")
+    return _via_builder(lambda b: b.filter(column, condition, value),
+                        "filter that")
 
 
 def clear_filter() -> str:
     """Remove the tab's basic filter, showing every row again."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
     if _current_filter() is None:
         return "There's no filter on this tab to clear."
-    request = {"clearBasicFilter": {"sheetId": _current["sheet_id"]}}
-    return _mutate("clearing the filter", _filter_undo(), [request],
-                   "Cleared the filter, so every row is showing again.")
+    return _via_builder(lambda b: b.clear_filter(), "clear the filter")
 
 
 def add_formula(cell: str, formula: str) -> str:
     """Put a formula in one cell. `cell` is A1 notation like "E2"; the
     formula is entered as if typed, so "SUM(A1:A5)" and "=SUM(A1:A5)" both
     work."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
-    if not (formula or "").strip():
-        return "Tell me what the formula should be."
-
-    text = formula.strip()
-    if not text.startswith("="):
-        text = "=" + text
-    try:
-        grid = _bounded(_a1_to_grid(cell))
-    except ValueError:
-        return f"I couldn't make sense of the cell {cell}."
-
-    # formulaValue is the batchUpdate equivalent of typing it in, which is
-    # what USER_ENTERED means for the values API.
-    request = {"updateCells": {
-        "rows": [{"values": [{"userEnteredValue": {"formulaValue": text}}]}],
-        "fields": "userEnteredValue",
-        "range": grid,
-    }}
-    return _mutate(f"the formula in {cell}", _snapshot(cell), [request],
-                   f"Put {text} in {cell}.")
+    return _via_builder(lambda b: b.set_formula(cell, formula),
+                        "add that formula")
 
 
 def insert_rows(at_index: int, count: int = 1) -> str:
     """Insert blank rows BEFORE row `at_index`. 1-based, as spoken."""
-    return _insert("ROWS", at_index, count)
+    return _via_builder(lambda b: b.insert_rows(at_index, count),
+                        "insert those rows")
 
 
 def insert_columns(at_index: int, count: int = 1) -> str:
     """Insert blank columns BEFORE column `at_index`. 1-based, as spoken."""
-    return _insert("COLUMNS", at_index, count)
+    return _via_builder(lambda b: b.insert_columns(at_index, count),
+                        "insert those columns")
 
 
 def _insert(dimension: str, at_index: int, count: int) -> str:
@@ -1092,12 +1013,14 @@ def _insert(dimension: str, at_index: int, count: int) -> str:
 
 def delete_rows(start: int, end: int = 0) -> str:
     """Delete rows `start` to `end` inclusive, 1-based, as spoken."""
-    return _delete("ROWS", start, end)
+    return _via_builder(lambda b: b.delete_rows(start, end or None),
+                        "delete those rows")
 
 
 def delete_columns(start: int, end: int = 0) -> str:
     """Delete columns `start` to `end` inclusive, 1-based, as spoken."""
-    return _delete("COLUMNS", start, end)
+    return _via_builder(lambda b: b.delete_columns(start, end or None),
+                        "delete those columns")
 
 
 def _delete(dimension: str, start: int, end: int) -> str:
@@ -1155,63 +1078,14 @@ def _move_inverse(start0: int, end0: int, dest0: int) -> tuple[int, int, int]:
 def move_rows(from_start: int, from_end: int, to_index: int) -> str:
     """Move rows `from_start` to `from_end` (inclusive, 1-based) so they sit
     before row `to_index` as the sheet is numbered now."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
-    try:
-        from_start, from_end, to_index = (int(from_start), int(from_end),
-                                          int(to_index))
-        source = _dim_range(from_start, from_end, "ROWS")
-    except (TypeError, ValueError):
-        return f"I couldn't work out which rows to move."
-    if to_index < 1:
-        return "I need a row number to move them to."
-
-    start0, end0, dest0 = source["startIndex"], source["endIndex"], to_index - 1
-    if start0 <= dest0 < end0:
-        return "Those rows are already there, so I've left them alone."
-
-    landed_start, landed_end, back = _move_inverse(start0, end0, dest0)
-    undo = _inverse_entry(f"rows {from_start} to {from_end}", [{"moveDimension": {
-        "source": {"sheetId": _current["sheet_id"], "dimension": "ROWS",
-                   "startIndex": landed_start, "endIndex": landed_end},
-        "destinationIndex": back,
-    }}])
-    request = {"moveDimension": {"source": source, "destinationIndex": dest0}}
-    count = from_end - from_start + 1
-    return _mutate(f"moving {count} row{'s' if count != 1 else ''}", undo,
-                   [request],
-                   f"Moved {count} row{'s' if count != 1 else ''} to row {to_index}.")
+    return _via_builder(
+        lambda b: b.move_rows(from_start, from_end, to_index),
+        "move those rows")
 
 
 def freeze_header(rows: int = 1) -> str:
     """Freeze the top `rows` rows so they stay put when scrolling."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
-    try:
-        rows = max(0, int(rows))
-    except (TypeError, ValueError):
-        return f"I couldn't work out how many rows to freeze."
-
-    was = _tab_props().get("gridProperties", {}).get("frozenRowCount", 0)
-    undo = _inverse_entry(_current["tab"], [{"updateSheetProperties": {
-        "properties": {"sheetId": _current["sheet_id"],
-                       "gridProperties": {"frozenRowCount": was}},
-        "fields": "gridProperties.frozenRowCount",
-    }}])
-    request = {"updateSheetProperties": {
-        "properties": {"sheetId": _current["sheet_id"],
-                       "gridProperties": {"frozenRowCount": rows}},
-        "fields": "gridProperties.frozenRowCount",
-    }}
-    said = ("Unfroze the top rows." if rows == 0 else
-            f"Froze the top {rows} row{'s' if rows != 1 else ''}.")
-    return _mutate("that freeze", undo, [request], said)
+    return _via_builder(lambda b: b.freeze(rows), "freeze the header")
 
 
 def _column_widths(count: int) -> list | None:
@@ -1237,113 +1111,72 @@ def _column_widths(count: int) -> list | None:
 
 def autosize_columns() -> str:
     """Resize every used column to fit its contents."""
-    if _service() is None:
-        return google_auth.not_connected_message()
-    complaint = _need_sheet()
-    if complaint:
-        return complaint
-
-    _, cols = _used_extent()
-    cols = max(cols, 1)
-    widths = _column_widths(cols)
-    if widths is None:
-        return ("I couldn't read the current column widths, so I've not "
-                "resized anything - I'd have had no way to put them back.")
-
-    undo_requests = [{"updateDimensionProperties": {
-        "range": {"sheetId": _current["sheet_id"], "dimension": "COLUMNS",
-                  "startIndex": i, "endIndex": i + 1},
-        "properties": {"pixelSize": width},
-        "fields": "pixelSize",
-    }} for i, width in enumerate(widths) if width]
-    undo = _inverse_entry(_current["tab"], undo_requests)
-
-    request = {"autoResizeDimensions": {"dimensions": {
-        "sheetId": _current["sheet_id"], "dimension": "COLUMNS",
-        "startIndex": 0, "endIndex": cols,
-    }}}
-    return _mutate("that resize", undo, [request],
-                   f"Resized {cols} column{'s' if cols != 1 else ''} to fit.")
+    return _via_builder(lambda b: b.autosize(), "resize the columns")
 
 
 # --------------------------------------------------------------------------
 # the escape hatch
 #
-# For the unusual request no named operation covers. The model writes the
-# batchUpdate body; nothing about that is trusted. It is checked against the
-# list of real request types, checked for any reference to another
-# spreadsheet, and then DESCRIBED FROM THE JSON ITSELF - not from what the
-# model said it was doing - so the sentence the user approves is derived from
-# what will actually run.
+# For the unusual request no named operation covers.
+#
+# The model no longer writes batchUpdate JSON. It writes a STRUCTURED PLAN -
+# a list of named steps with arguments - which our own code translates into
+# builder calls. An invented step name or a malformed argument is rejected
+# here, by us, and never reaches Google. Raw JSON could only ever be checked
+# for plausibility; a step list can be checked for correctness.
+#
+# It also fixes what made "delete all the rows coloured orange" impossible:
+# one batchUpdate cannot read the formats, decide which rows match, and
+# delete them in descending order. A plan can.
 # --------------------------------------------------------------------------
 
-# Every batchUpdate request type. Anything not here is refused outright: an
-# unknown key means the model invented something, and inventions don't run.
-KNOWN_REQUEST_TYPES = {
-    "addBanding", "addChart", "addConditionalFormatRule", "addDimensionGroup",
-    "addFilterView", "addNamedRange", "addProtectedRange", "addSheet",
-    "addSlicer", "appendCells", "appendDimension", "autoFill",
-    "autoResizeDimensions", "clearBasicFilter", "copyPaste", "createDeveloperMetadata",
-    "cutPaste", "deleteBanding", "deleteConditionalFormatRule",
-    "deleteDeveloperMetadata", "deleteDimension", "deleteDimensionGroup",
-    "deleteDuplicates", "deleteEmbeddedObject", "deleteFilterView",
-    "deleteNamedRange", "deleteProtectedRange", "deleteRange", "deleteSheet",
-    "duplicateFilterView", "duplicateSheet", "findReplace", "insertDimension",
-    "insertRange", "mergeCells", "moveDimension", "pasteData",
-    "randomizeRange", "repeatCell", "setBasicFilter", "setDataValidation",
-    "sortRange", "textToColumns", "trimWhitespace", "unmergeCells",
-    "updateBanding", "updateBorders", "updateCells", "updateChartSpec",
-    "updateConditionalFormatRule", "updateDeveloperMetadata",
-    "updateDimensionGroup", "updateDimensionProperties", "updateEmbeddedObjectPosition",
-    "updateFilterView", "updateNamedRange", "updateProtectedRange",
-    "updateSheetProperties", "updateSlicerSpec", "updateSpreadsheetProperties",
+MAX_PLAN_STEPS = 10
+
+# step name -> (builder method, required args, optional args)
+PLAN_STEPS = {
+    "sort": ("sort", ("column",), ("order",)),
+    "filter": ("filter", ("column", "condition"), ("value",)),
+    "clear_filter": ("clear_filter", (), ()),
+    "colour": ("colour", ("range", "colour"), ()),
+    "highlight_where": ("highlight_where",
+                        ("column", "condition", "value", "colour"), ()),
+    "delete_rows_where": ("delete_rows_where", ("match",),
+                          ("column", "value", "colour")),
+    "insert_rows": ("insert_rows", ("at",), ("count",)),
+    "delete_rows": ("delete_rows", ("start",), ("end",)),
+    "insert_columns": ("insert_columns", ("at",), ("count",)),
+    "delete_columns": ("delete_columns", ("start",), ("end",)),
+    "move_rows": ("move_rows", ("from_start", "from_end", "to_index"), ()),
+    "set_formula": ("set_formula", ("cell", "formula"), ()),
+    "freeze": ("freeze", (), ("rows",)),
+    "autosize": ("autosize", (), ()),
+    "export": ("export", (), ("path",)),
 }
 
-# Types that change the SHAPE of the sheet. A cell snapshot can't put these
-# back, so the confirmation says so out loud rather than implying a clean undo.
-STRUCTURAL_TYPES = {
-    "addSheet", "deleteSheet", "duplicateSheet", "deleteDimension",
-    "insertDimension", "appendDimension", "moveDimension", "insertRange",
-    "deleteRange", "cutPaste", "mergeCells", "unmergeCells", "textToColumns",
-    "deleteDuplicates", "randomizeRange", "autoFill", "appendCells",
-}
-
-# Any key that could point the operation at a different file.
-_FOREIGN_KEYS = {"spreadsheetid", "destinationspreadsheetid"}
-
-MAX_GENERATED_REQUESTS = 10
-
-GENERATE_SYSTEM = (
-    "You write Google Sheets API batchUpdate requests. Reply with ONLY a "
-    "JSON array of Request objects - no prose, no markdown fences, no "
-    "explanation. Each element must be an object with exactly one key naming "
-    "a real batchUpdate request type, for example repeatCell, sortRange, "
-    "updateCells, setBasicFilter, deleteDimension. Use only the sheetId you "
-    "are given. Never include a spreadsheetId. GridRange indexes are "
-    "ZERO-BASED with the end index EXCLUSIVE. Keep it to the fewest requests "
-    "that do the job. If the request cannot be done with batchUpdate, reply "
-    "with exactly []."
+PLAN_SYSTEM = (
+    "You turn a spoken spreadsheet request into a PLAN: a JSON array of "
+    "steps. Reply with ONLY that array - no prose, no markdown fences.\n\n"
+    "Each step is an object with a 'step' key naming one of:\n"
+    "  sort {column, order}            filter {column, condition, value}\n"
+    "  clear_filter {}                 colour {range, colour}\n"
+    "  highlight_where {column, condition, value, colour}\n"
+    "  delete_rows_where {match, column, value, colour}\n"
+    "  insert_rows {at, count}         delete_rows {start, end}\n"
+    "  insert_columns {at, count}      delete_columns {start, end}\n"
+    "  move_rows {from_start, from_end, to_index}\n"
+    "  set_formula {cell, formula}     freeze {rows}\n"
+    "  autosize {}                     export {path}\n\n"
+    "Rows and columns are 1-based, as the sheet labels them. Ranges are A1 "
+    "like B2:D10. Colours are one of: red, green, yellow, blue, orange, "
+    "grey.\n\n"
+    "For delete_rows_where, 'match' is either a condition (equals, contains, "
+    "greater than, less than, empty) with a column and value, or the words "
+    "'background colour' with a colour. Use it whenever rows are chosen by "
+    "what they contain or how they look - never guess row numbers you have "
+    "not been told.\n\n"
+    "Use the fewest steps that do the job. If the request cannot be done "
+    "with these steps, reply with exactly []."
 )
-
-
-def _sheet_context() -> str:
-    """What the model needs to write a correct request for THIS tab."""
-    headers = _headers()
-    rows, cols = _used_extent()
-    columns = ", ".join(
-        f"{_index_to_col(i)}={h}" for i, h in enumerate(headers) if h) or "none"
-    return (f"Spreadsheet: {_current['title']}. Tab: {_current['tab']}, "
-            f"sheetId {_current['sheet_id']}. Used range: {rows} rows by "
-            f"{cols} columns. Header row: {columns}.")
-
-
-def _strip_fences(text: str) -> str:
-    """Models wrap JSON in ```json fences however firmly you ask them not to."""
-    text = (text or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    return text.strip()
 
 
 # --- which model does the sheet thinking -------------------------------
@@ -1418,207 +1251,116 @@ def _ask_model(system: str, user: str, max_tokens: int = 900) -> tuple[str, str]
     return _ask_groq(system, user, max_tokens)
 
 
-def _generate_requests(request_text: str) -> tuple[list | None, str]:
-    """Ask the model for a batchUpdate body. (requests, error_sentence)."""
-    raw, error = _ask_model(GENERATE_SYSTEM, (
+def _sheet_context() -> str:
+    """What the model needs to plan against THIS tab."""
+    headers = _headers()
+    rows, cols = _used_extent()
+    columns = ", ".join(
+        f"{_index_to_col(i)}={h}" for i, h in enumerate(headers) if h) or "none"
+    return (f"Spreadsheet: {_current['title']}. Tab: {_current['tab']}. "
+            f"Used range: {rows} rows by {cols} columns. "
+            f"Header row: {columns}.")
+
+
+def _strip_fences(text: str) -> str:
+    """Models wrap JSON in fences however firmly you ask them not to."""
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text)
+    return text.strip()
+
+
+def _generate_plan(request_text: str) -> tuple:
+    """Ask the model for a step list. (steps, error_sentence)."""
+    raw, error = _ask_model(PLAN_SYSTEM, (
         f"{_sheet_context()}\n\nThe user asked: {request_text}\n\n"
-        "Give the JSON array of requests now."))
+        "Give the JSON array of steps now."), 700)
     if error:
-        print(f"[sheets] couldn't generate the operation: {error}")
+        print(f"[sheets] couldn't plan that: {error}")
         return None, "I couldn't work out how to do that just now."
-    raw = _strip_fences(raw)
-
     try:
-        parsed = json.loads(raw)
+        parsed = json.loads(_strip_fences(raw))
     except json.JSONDecodeError:
-        print(f"[sheets] generated body wasn't JSON: {raw[:200]!r}")
-        return None, "I couldn't turn that into a change I trust, so I've done nothing."
-
+        print(f"[sheets] plan wasn't JSON: {raw[:200]!r}")
+        return None, ("I couldn't turn that into a plan I trust, so I've "
+                      "done nothing.")
     if isinstance(parsed, dict):
-        parsed = parsed.get("requests", parsed)
+        parsed = parsed.get("steps", parsed)
         if isinstance(parsed, dict):
             parsed = [parsed]
     if not isinstance(parsed, list):
-        return None, "I couldn't turn that into a change I trust, so I've done nothing."
+        return None, ("I couldn't turn that into a plan I trust, so I've "
+                      "done nothing.")
     return parsed, ""
 
 
-def _walk(node):
-    """Every (key, value) pair anywhere in a nested structure."""
-    if isinstance(node, dict):
-        for key, value in node.items():
-            yield key, value
-            yield from _walk(value)
-    elif isinstance(node, list):
-        for item in node:
-            yield from _walk(item)
+def _foreign_reference(steps: list) -> str | None:
+    """Anything naming another spreadsheet. A structured step list has no
+    place to put one, so its presence means the model went off-piste."""
+    blob = json.dumps(steps).lower()
+    for marker in ("spreadsheetid", "docs.google.com/spreadsheets", "/d/"):
+        if marker in blob:
+            return ("That plan pointed at a different spreadsheet, so I've "
+                    "refused it.")
+    return None
 
 
-def _validate_requests(requests: list) -> tuple[list, str]:
-    """Check a generated body before it can run. (requests, error_sentence)
-    - an error means nothing should execute."""
-    if not isinstance(requests, list) or not requests:
-        return [], "I couldn't see a way to do that, so I've changed nothing."
-    if len(requests) > MAX_GENERATED_REQUESTS:
-        return [], (f"That would take {len(requests)} separate changes, which "
-                    "is more than I'll do in one go.")
+def _build_from_steps(steps: list):
+    """Structured steps -> a builder. Raises PlanError with a speakable
+    sentence for anything unrecognised, so a bad step is caught by our code
+    rather than by Google."""
+    from athena.sheet_builder import PlanError, SheetRequestBuilder
 
-    known_tab_ids = {props.get("sheetId") for props in _tabs()}
+    if not isinstance(steps, list) or not steps:
+        raise PlanError("I couldn't see a way to do that, so I've changed "
+                        "nothing.")
+    if len(steps) > MAX_PLAN_STEPS:
+        raise PlanError(f"That would take {len(steps)} separate steps, which "
+                        "is more than I'll do in one go.")
 
-    for request in requests:
-        if not isinstance(request, dict) or len(request) != 1:
-            return [], "The change I came up with was malformed, so I've not run it."
-        name = next(iter(request))
-        if name not in KNOWN_REQUEST_TYPES:
-            return [], (f"I came up with a {name} step, which isn't a real "
-                        "spreadsheet operation, so I've not run it.")
-        if not isinstance(request[name], dict):
-            return [], "The change I came up with was malformed, so I've not run it."
+    builder = SheetRequestBuilder()
+    for step in steps:
+        if not isinstance(step, dict):
+            raise PlanError("That plan was malformed, so I've not run it.")
+        name = str(step.get("step", "")).strip()
+        if name not in PLAN_STEPS:
+            raise PlanError(f"I came up with a step called "
+                            f"{name or 'nothing'}, which isn't something I "
+                            "know how to do.")
+        method_name, required, optional = PLAN_STEPS[name]
+        missing = [k for k in required if step.get(k) in (None, "")]
+        if missing:
+            raise PlanError(f"The {name} step was missing "
+                            f"{' and '.join(missing)}, so I've not run it.")
 
-        for key, value in _walk(request):
-            lowered = str(key).lower()
-            # Nothing may point at another file.
-            if lowered in _FOREIGN_KEYS:
-                if str(value) != str(_current["id"]):
-                    return [], ("That change pointed at a different "
-                                "spreadsheet, so I've refused it.")
-            # Nor at a tab that isn't in this spreadsheet.
-            if lowered == "sheetid" and isinstance(value, int):
-                if known_tab_ids and value not in known_tab_ids:
-                    return [], ("That change pointed at a tab that isn't in "
-                                "this spreadsheet, so I've refused it.")
-    return requests, ""
+        if name == "delete_rows_where":
+            match = str(step.get("match", "")).strip()
+            lowered = match.lower()
+            if "colour" in lowered or "color" in lowered:
+                predicate = {"kind": "background colour",
+                             "colour": step.get("colour")}
+            else:
+                predicate = {"kind": match, "column": step.get("column"),
+                             "value": step.get("value", "")}
+            builder.delete_rows_where(predicate)
+            continue
 
-
-def _grid_phrase(grid) -> str:
-    """A GridRange as something sayable."""
-    if not isinstance(grid, dict):
-        return "part of the sheet"
-    a1 = _grid_to_a1(grid)
-    if not a1:
-        return "the whole tab"
-    return a1.replace(":", " to ")
-
-
-def _dimension_phrase(dim_range) -> str:
-    if not isinstance(dim_range, dict):
-        return "some rows"
-    word = "column" if str(dim_range.get("dimension", "")).upper() == "COLUMNS" else "row"
-    start = dim_range.get("startIndex")
-    end = dim_range.get("endIndex")
-    if start is None or end is None:
-        return f"{word}s"
-    count = end - start
-    if count == 1:
-        return f"{word} {start + 1}"
-    return f"{word}s {start + 1} to {end}"
-
-
-def _describe_request(request: dict) -> str:
-    """Say what ONE request will do, read out of the request itself."""
-    name = next(iter(request))
-    body = request[name] if isinstance(request[name], dict) else {}
-
-    if name == "repeatCell":
-        fields = str(body.get("fields", ""))
-        what = ("colour" if "backgroundColor" in fields
-                else "formatting" if "Format" in fields else "contents")
-        return f"change the {what} of {_grid_phrase(body.get('range'))}"
-    if name == "updateCells":
-        return f"overwrite {_grid_phrase(body.get('range'))}"
-    if name == "sortRange":
-        return f"sort {_grid_phrase(body.get('range'))}"
-    if name == "deleteDimension":
-        return f"delete {_dimension_phrase(body.get('range'))}"
-    if name == "insertDimension":
-        return f"insert {_dimension_phrase(body.get('range'))}"
-    if name == "appendDimension":
-        count = body.get("length", "some")
-        word = "columns" if str(body.get("dimension", "")).upper() == "COLUMNS" else "rows"
-        return f"add {count} more {word} at the end"
-    if name == "moveDimension":
-        return (f"move {_dimension_phrase(body.get('source'))} to position "
-                f"{body.get('destinationIndex', 0) + 1}")
-    if name == "setBasicFilter":
-        return "set a filter on the tab"
-    if name == "clearBasicFilter":
-        return "remove the filter"
-    if name == "mergeCells":
-        return f"merge {_grid_phrase(body.get('range'))}"
-    if name == "unmergeCells":
-        return f"unmerge {_grid_phrase(body.get('range'))}"
-    if name == "updateBorders":
-        return f"change the borders of {_grid_phrase(body.get('range'))}"
-    if name == "addConditionalFormatRule":
-        return "add a conditional formatting rule"
-    if name == "deleteConditionalFormatRule":
-        return "remove a conditional formatting rule"
-    if name == "setDataValidation":
-        return f"set data validation on {_grid_phrase(body.get('range'))}"
-    if name == "autoResizeDimensions":
-        return "resize columns to fit their contents"
-    if name == "updateDimensionProperties":
-        return f"resize {_dimension_phrase(body.get('range'))}"
-    if name == "updateSheetProperties":
-        return "change the tab's settings"
-    if name == "addSheet":
-        title = body.get("properties", {}).get("title", "a new tab")
-        return f"add a tab called {title}"
-    if name == "deleteSheet":
-        return "DELETE A WHOLE TAB"
-    if name == "duplicateSheet":
-        return "duplicate the tab"
-    if name == "findReplace":
-        return (f"replace {body.get('find', 'something')} with "
-                f"{body.get('replacement', 'something else')}")
-    if name == "deleteDuplicates":
-        return f"delete duplicate rows in {_grid_phrase(body.get('range'))}"
-    if name == "trimWhitespace":
-        return f"trim spaces in {_grid_phrase(body.get('range'))}"
-    if name == "textToColumns":
-        return "split text into columns"
-    if name == "cutPaste":
-        return f"cut and paste into {_grid_phrase(body.get('destination'))}"
-    if name == "copyPaste":
-        return f"copy into {_grid_phrase(body.get('destination'))}"
-
-    # Anything else: say its name in plain words rather than pretend to know.
-    spaced = re.sub(r"(?<!^)(?=[A-Z])", " ", name).lower()
-    return f"run a {spaced} step"
-
-
-def _plan_parts(requests: list) -> tuple[str, str]:
-    """(what it will do, any warning). Kept separate so the confirmation and
-    the after-the-fact sentence can be built from the same phrase without
-    slicing strings apart."""
-    parts = [_describe_request(r) for r in requests]
-    action = parts[0] if len(parts) == 1 else ", then ".join(parts)
-    warning = ""
-    if any(next(iter(r)) in STRUCTURAL_TYPES for r in requests):
-        warning = (" That changes the shape of the sheet, so I'd only be "
-                   "able to put part of it back.")
-    return action, warning
-
-
-def _describe_requests(requests: list) -> str:
-    """The plain-English plan the user is asked to approve."""
-    action, warning = _plan_parts(requests)
-    return f"I'd {action}, on the {_current['tab']} tab.{warning}"
-
-
-def _snapshot_tab() -> dict | None:
-    """Snapshot everything in use on the current tab."""
-    rows, cols = _used_extent()
-    a1 = f"A1:{_index_to_col(max(cols, 1) - 1)}{max(rows, 1)}"
-    return _snapshot(a1)
+        kwargs = {k: step[k] for k in tuple(required) + tuple(optional)
+                  if step.get(k) not in (None, "")}
+        # The builder's parameter name differs from the spoken step name in
+        # one place; map it rather than renaming the public API.
+        if name == "colour":
+            kwargs["a1_range"] = kwargs.pop("range")
+        getattr(builder, method_name)(**kwargs)
+    return builder
 
 
 def apply_sheet_operation(natural_language_request: str) -> str:
-    """The escape hatch: do something no named operation covers.
+    """The escape hatch: a multi-stage change, planned, described, approved,
+    then run all at once or not at all."""
+    from athena.sheet_builder import PlanError, execute
 
-    The model writes the batchUpdate body, which is then validated, described
-    from the JSON itself, and read back for approval. Nothing runs without an
-    explicit yes."""
     if _service() is None:
         return google_auth.not_connected_message()
     complaint = _need_sheet()
@@ -1627,30 +1369,38 @@ def apply_sheet_operation(natural_language_request: str) -> str:
     if not (natural_language_request or "").strip():
         return "Tell me what you'd like me to do to the sheet."
 
-    requests, error = _generate_requests(natural_language_request)
+    steps, error = _generate_plan(natural_language_request)
     if error:
         return error
-    requests, error = _validate_requests(requests)
-    if error:
-        return error
-
-    plan = _describe_requests(requests)
-    print(f"[sheets] generated: {json.dumps(requests)[:400]}")
-
-    if _confirm is None:
-        # No way to ask, so no way to run it. Say the plan instead of doing it.
-        return (f"{plan} But I can't ask you to confirm that right now, so I "
-                "haven't done it.")
+    foreign = _foreign_reference(steps)
+    if foreign:
+        return foreign
 
     try:
-        approved = bool(_confirm(f"{plan} Shall I go ahead?"))
+        builder = _build_from_steps(steps)
+        builder.resolve()          # look at the sheet, turn predicates to rows
+        plan = builder.build()     # validate everything, then freeze it
+    except PlanError as exc:
+        return str(exc)            # already written to be spoken
+    except Exception as exc:
+        print(f"[sheets] planning failed: {exc!r}")
+        return ("I couldn't turn that into a plan I trust, so I've done "
+                "nothing.")
+
+    if plan.is_empty():
+        return "That worked out to no changes at all, so I've left it alone."
+
+    print(f"[sheets] plan: {json.dumps(steps)[:300]}")
+
+    if _confirm is None:
+        return (f"{plan.description} But I can't ask you to confirm that "
+                "right now, so I haven't done it.")
+    try:
+        approved = bool(_confirm(f"{plan.description} Shall I go ahead?"))
     except Exception as exc:
         print(f"[sheets] confirm failed: {exc!r}")
         approved = False
     if not approved:
         return "Right, I've left the sheet alone."
 
-    action, _ = _plan_parts(requests)
-    snapshot = _snapshot_tab()
-    return _mutate("that change", snapshot, requests,
-                   f"Done - {action} on the {_current['tab']} tab.")
+    return execute(plan)

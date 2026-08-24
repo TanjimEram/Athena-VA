@@ -293,12 +293,25 @@ if __name__ == "__main__":
         raises(f"{kind}", lambda k=kind: SheetRequestBuilder().delete_rows_where(
             {"kind": k, "column": "Score"}), expect)
 
-    print("\n=== matching nothing is not an error ===")
+    print("\n=== asking for a colour that isn't there says what IS ===")
+    # Deliberate: silently matching nothing on a visibly coloured sheet is
+    # almost always a naming mismatch (Google's amber reads as yellow), and
+    # a blank result teaches the user nothing.
+    raises("no blue rows, but there are others",
+           lambda: SheetRequestBuilder()
+           .delete_rows_where({"kind": COLOUR_PREDICATE, "colour": "blue"})
+           .resolve(FakeReader()).build(),
+           "What I can see is")
+
+    print("\n=== an uncoloured sheet is a no-op, not an error ===")
+    class PlainReader(FakeReader):
+        def backgrounds(self):
+            return [[WHITE] * 3 for _ in range(6)]
     plan = (SheetRequestBuilder()
-            .delete_rows_where({"kind": COLOUR_PREDICATE, "colour": "blue"})
-            .resolve(FakeReader()).build())
+            .delete_rows_where({"kind": COLOUR_PREDICATE, "colour": "orange"})
+            .resolve(PlainReader()).build())
     check("no requests emitted", plan.requests == ())
-    check("still describes itself honestly", "0 rows" in plan.description,
+    check("describes itself honestly", "0 rows" in plan.description,
           plan.description)
 
     # ================= phase 3: atomic execution =================

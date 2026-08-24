@@ -246,7 +246,7 @@ class LiveSheetReader:
 
     def values(self) -> list:
         """Every used cell on the tab, as text."""
-        return sheets._values(sheets.current().get("tab", "")) or []
+        return sheets._tab_values() or []
 
     def backgrounds(self) -> list:
         """The background colour of every used cell, as a grid matching
@@ -309,11 +309,17 @@ class SheetRequestBuilder:
             self._sheet_id = resolved
         return self
 
-    def sort(self, column, order: str = "asc") -> "SheetRequestBuilder":
+    def sort(self, column, order: str = "asc",
+             a1_range: str | None = None) -> "SheetRequestBuilder":
+        """Sort by a column. With no range, the used extent of the tab -
+        which is what someone means by "sort it by score". An explicit range
+        sorts exactly that, which is what sheets.sort_range promises."""
         descending = str(order or "").lower().startswith(("desc", "z", "high"))
         self._steps.append(_Step(
-            "sort", {"column": column, "descending": descending},
-            says=f"sort by {self._say_column(column)}, "
+            "sort", {"column": column, "descending": descending,
+                     "range": a1_range},
+            says=f"sort {a1_range + ' ' if a1_range else ''}"
+                 f"by {self._say_column(column)}, "
                  f"{'descending' if descending else 'ascending'}"))
         return self
 
@@ -386,6 +392,51 @@ class SheetRequestBuilder:
             "delete_rows_where", {"predicate": dict(predicate)},
             says=f"delete every row where {self._say_predicate(predicate)}",
             needs_resolution=True))
+        return self
+
+    def insert_columns(self, at: int, count: int = 1) -> "SheetRequestBuilder":
+        at = self._whole(at, "column")
+        count = self._whole(count, "count", allow_zero=True)
+        if count < 1:
+            raise PlanError("I need at least one column to insert.")
+        self._steps.append(_Step(
+            "insert_columns", {"at": at, "count": count},
+            says=f"insert {count} column{'s' if count != 1 else ''} at column {at}"))
+        return self
+
+    def delete_columns(self, start: int, end: int | None = None) -> "SheetRequestBuilder":
+        start = self._whole(start, "column")
+        end = start if end in (None, 0) else self._whole(end, "column")
+        if end < start:
+            raise PlanError(f"Columns {start} to {end} runs backwards, "
+                            "so I've not built that.")
+        self._steps.append(_Step(
+            "delete_columns", {"start": start, "end": end},
+            says=(f"delete column {start}" if start == end
+                  else f"delete columns {start} to {end}")))
+        return self
+
+    def move_rows(self, from_start: int, from_end: int,
+                  to_index: int) -> "SheetRequestBuilder":
+        from_start = self._whole(from_start, "row")
+        from_end = self._whole(from_end, "row")
+        to_index = self._whole(to_index, "row")
+        if from_end < from_start:
+            raise PlanError(f"Rows {from_start} to {from_end} runs backwards, "
+                            "so I've not built that.")
+        if from_start <= to_index <= from_end:
+            raise PlanError("Those rows are already there, so there's "
+                            "nothing to move.")
+        count = from_end - from_start + 1
+        self._steps.append(_Step(
+            "move_rows",
+            {"from_start": from_start, "from_end": from_end, "to": to_index},
+            says=f"move {count} row{'s' if count != 1 else ''} to row {to_index}"))
+        return self
+
+    def clear_filter(self) -> "SheetRequestBuilder":
+        self._steps.append(_Step("clear_filter", {},
+                                 says="clear the filter"))
         return self
 
     def set_formula(self, cell: str, formula: str) -> "SheetRequestBuilder":
@@ -498,17 +549,32 @@ class SheetRequestBuilder:
             if backgrounds is None:
                 raise PlanError("I couldn't read the cell colours, so I've "
                                 "not changed anything.")
-            matched = []
+            matched, present = [], {}
             for index, row in enumerate(backgrounds):
                 if index == 0:
                     continue
                 names = [match_colour_name(cell) for cell in row if cell]
                 names = [n for n in names if n]
+                if not names:
+                    continue
                 # A row counts as coloured when the colour is what the row
                 # actually looks like - the most common colour across its
                 # filled cells, not merely present in one of them.
-                if names and max(set(names), key=names.count) == wanted:
+                label = max(set(names), key=names.count)
+                present[label] = present.get(label, 0) + 1
+                if label == wanted:
                     matched.append(index)
+            if not matched and present:
+                # Matching nothing while the sheet is visibly coloured is
+                # almost always a naming mismatch - Google's amber reads as
+                # yellow to us, and "orange" then finds nothing. Say what IS
+                # there rather than reporting a blank.
+                found = ", ".join(f"{count} {name}"
+                                  for name, count in sorted(present.items(),
+                                                            key=lambda kv: -kv[1]))
+                raise PlanError(
+                    f"I couldn't find any {wanted} rows. What I can see is: "
+                    f"{found}. Say one of those and I'll do it.")
             return matched
 
         key = sheets._resolve_condition(kind)
@@ -665,18 +731,25 @@ class SheetRequestBuilder:
                         f"which stops at row {limit}.")
 
     def _check_delete_overlap(self) -> None:
-        spans = []
-        for step in self._steps:
-            if step.kind == "delete_rows":
-                spans.append((step.args["start"], step.args["end"]))
-            elif step.kind == "delete_rows_where" and step.resolved_rows:
-                spans.extend((r + 1, r + 1) for r in step.resolved_rows)
-        spans.sort()
-        for (a_start, a_end), (b_start, b_end) in zip(spans, spans[1:]):
-            if b_start <= a_end:
-                raise PlanError(
-                    f"I can't do that - it would delete rows {b_start} to "
-                    f"{min(a_end, b_end)} twice over.")
+        """Two deletes covering the same line would take the wrong rows the
+        second time round. Checked per dimension - deleting row 3 and column
+        3 is fine, deleting rows 3-6 and 5-8 is not."""
+        for dimension, kinds in (("row", ("delete_rows", "delete_rows_where")),
+                                 ("column", ("delete_columns",))):
+            spans = []
+            for step in self._steps:
+                if step.kind not in kinds:
+                    continue
+                if step.kind == "delete_rows_where":
+                    spans.extend((r + 1, r + 1) for r in (step.resolved_rows or ()))
+                else:
+                    spans.append((step.args["start"], step.args["end"]))
+            spans.sort()
+            for (_a_start, a_end), (b_start, b_end) in zip(spans, spans[1:]):
+                if b_start <= a_end:
+                    raise PlanError(
+                        f"I can't do that - it would delete {dimension}s "
+                        f"{b_start} to {min(a_end, b_end)} twice over.")
 
     def _grid(self, a1: str) -> dict:
         """A1 -> GridRange, delegated to sheets._a1_to_grid so there is one
@@ -704,9 +777,11 @@ class SheetRequestBuilder:
 
         if kind == "sort":
             index = self._facts.column_index(args["column"]) or 0
-            width = max(self._facts.column_count, index + 1, 1)
-            rows = max(self._facts.row_count, 1)
-            a1 = f"A1:{sheets._index_to_col(width - 1)}{rows}"
+            a1 = args.get("range")
+            if not a1:
+                width = max(self._facts.column_count, index + 1, 1)
+                rows = max(self._facts.row_count, 1)
+                a1 = f"A1:{sheets._index_to_col(width - 1)}{rows}"
             return ([{"sortRange": {
                 "range": self._grid(a1),
                 "sortSpecs": [{"dimensionIndex": index,
@@ -763,6 +838,28 @@ class SheetRequestBuilder:
                     "range": self._rows_grid(row + 1, row + 1)}})
                 touched.append(f"{row + 1}:{row + 1}")
             return requests, touched
+
+        if kind == "insert_columns":
+            at, count = args["at"], args["count"]
+            return ([{"insertDimension": {
+                "range": sheets._dim_range(at, at + count - 1, "COLUMNS",
+                                           sheet_id=sid),
+                "inheritFromBefore": False}}], [self._tab])
+
+        if kind == "delete_columns":
+            start, end = args["start"], args["end"]
+            return ([{"deleteDimension": {
+                "range": sheets._dim_range(start, end, "COLUMNS",
+                                           sheet_id=sid)}}], [self._tab])
+
+        if kind == "move_rows":
+            source = self._rows_grid(args["from_start"], args["from_end"])
+            return ([{"moveDimension": {
+                "source": source,
+                "destinationIndex": args["to"] - 1}}], [self._tab])
+
+        if kind == "clear_filter":
+            return ([{"clearBasicFilter": {"sheetId": sid}}], [self._tab])
 
         if kind == "set_formula":
             return ([{"updateCells": {

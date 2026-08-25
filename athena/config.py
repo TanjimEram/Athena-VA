@@ -73,10 +73,18 @@ VISION_MAX_EDGE = 1536
 # Microphone recording defaults: 16 kHz mono is what speech models want.
 AUDIO_SAMPLERATE = 16000
 
-# Wake word (openWakeWord, no API key). WAKE_MODEL is either a pretrained
-# name like "hey_jarvis" or a path to a custom .onnx file — swapping in our
-# own "Athena" model later is just changing this one line.
-WAKE_MODEL = "hey_jarvis"
+# Wake word (openWakeWord, no API key, all local).
+#
+# WAKE_MODEL is a pretrained name ("hey_jarvis"), a bare name of a model in
+# MODELS_DIR ("hey_athena"), or a full path to a .onnx file. wake.py resolves
+# all three, so the dashboard dropdown can hold a friendly name.
+#
+# ONNX rather than TFLite on purpose: onnxruntime is already a dependency and
+# there is no TFLite runtime on this machine. The trained model ships in both
+# formats; only the .onnx is used.
+MODELS_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "models")
+WAKE_MODEL = "hey_athena"
 # 0..1 confidence needed to trigger. Lower = more sensitive, more false wakes.
 WAKE_THRESHOLD = 0.5
 

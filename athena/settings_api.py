@@ -38,7 +38,10 @@ MODELS = {
     "openai": ["gpt-4o", "gpt-4o-mini"],
     "anthropic": ["claude-sonnet-4-5", "claude-opus-4-5"],
 }
-WAKE_MODELS = ["hey_jarvis", "alexa", "hey_mycroft"]
+# Our own trained model first, then openWakeWord's pretrained ones. A bare
+# name here is resolved by wake.resolve_model - models/<name>.onnx if it
+# exists, otherwise a pretrained download.
+WAKE_MODELS = ["hey_athena", "hey_jarvis", "alexa", "hey_mycroft"]
 
 
 def _mask(value: str) -> str:

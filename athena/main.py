@@ -379,9 +379,15 @@ def main() -> None:
     config.check_config()
     wake.preload()
     config.get_groq_client()
-    print(f"Athena is online. Wake model '{config.WAKE_MODEL}' "
-          f"(threshold {config.WAKE_THRESHOLD}). Say 'hey Jarvis', click the "
-          "orb for the dashboard, close the window or say 'go to sleep' to quit.")
+    # Read the model actually in use, not the config default - they differ
+    # as soon as anyone picks one in the dashboard, and a banner that names
+    # the wrong wake phrase is worse than no banner.
+    _model_name = str(settings.get("wake_model", config.WAKE_MODEL))
+    _phrase = _model_name.replace("_", " ").replace(".onnx", "").strip()
+    print(f"Athena is online. Wake model '{_model_name}' "
+          f"(threshold {settings.get('wake_threshold', config.WAKE_THRESHOLD)}). "
+          f"Say '{_phrase}', click the orb for the dashboard, close the "
+          "window or say 'go to sleep' to quit.")
 
     # Warm the voice path in the background: mixer, asyncio loop, and one
     # throwaway synthesis so the first real reply skips the TLS handshake.

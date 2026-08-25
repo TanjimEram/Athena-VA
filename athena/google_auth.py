@@ -33,6 +33,11 @@ SCOPES = [
     # "list spreadsheets" call in the Sheets API though, so finding one by
     # NAME still goes through Drive and so still only sees our own files.
     "https://www.googleapis.com/auth/spreadsheets",
+    # Calendar EVENTS, deliberately not the full "calendar" scope. Athena
+    # reads and books events; she has no business creating, sharing or
+    # deleting whole calendars, and the narrower scope makes that structural
+    # rather than a promise.
+    "https://www.googleapis.com/auth/calendar.events",
 ]
 
 _creds = None

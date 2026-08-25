@@ -241,7 +241,8 @@ cached token on load, so adding a scope later gives a clear "sign in again"
 message rather than an error deep inside an API call.
 
 ```python
-SCOPES: list[str]      # documents, drive.file, gmail.readonly, gmail.compose
+SCOPES: list[str]      # documents, drive.file, gmail.readonly, gmail.compose,
+                       # spreadsheets, calendar.events
 
 is_configured() -> bool                 # client id + secret present in .env
 get_credentials(interactive=False)      # -> Credentials | None
@@ -551,6 +552,57 @@ Verify with `python sheet_builder_test.py` (119 checks, offline) and
 creates and deletes).
 
 Patterns used across the project are recorded in **docs/design-patterns.md**.
+
+### athena/calendar_skill.py — the calendar, spoken (Phase 1: READ-ONLY)
+Google Calendar through the API. Named `calendar_skill.py` so it can never be
+confused with the standard library's `calendar`. **Phase 1 writes nothing** —
+no create, no move, no cancel; those arrive in phase 2.
+
+**Saying it, not printing it.** The API deals in `2026-08-26T14:30:00+06:00`;
+a listener hears "half past two this afternoon". That translation is most of
+the module and it lives in pure `_spoken_*` functions of a datetime, which is
+what lets 39 phrasing checks run offline with no sign-in and no network. The
+four spoken rules are structural: never a raw timestamp, group by day once an
+answer spans more than one, say "you have nothing scheduled" rather than
+returning an empty list, and stop at `MAX_SPOKEN_EVENTS` (5) then say how many
+are left.
+
+**Time zone.** The machine's own, from `datetime.now().astimezone()` —
+Bangladesh Standard Time, UTC+06:00 here. There is no IANA database on this
+machine (`zoneinfo.TZPATH` is empty), and none is needed: the Calendar API
+accepts RFC3339 stamps that carry their own offset. `timezone_name()` reports
+what was detected.
+
+**A week ends on Friday.** The weekend here is Friday and Saturday, so
+"this week" is today through the coming Friday inclusive. Asked on a Friday
+that is just today; asked on a Saturday it runs the full seven days round to
+next Friday.
+
+**Scope.** `calendar.events`, deliberately not the full `calendar` scope —
+Athena reads and books events and has no business managing calendars
+themselves. Adding it invalidates any earlier sign-in on purpose
+(`google_auth._load_cached`), so the first run after this change needs
+`python google_auth_test.py --reset` and fresh consent. A token that predates
+the scope gets its own sentence ("signed in, but not yet for your calendar"),
+kept separate from "not signed in" because the fix is different.
+
+```python
+get_current_time() -> str            # local time and date, spoken naturally
+read_schedule(when="today") -> str   # today / tomorrow / this week / a date
+next_event() -> str
+find_event(query) -> str             # title match, not Google's whole-event q
+
+timezone_name() -> str               # what zone we detected, for setup notes
+```
+
+Recurring events are expanded with `singleEvents=True`, so a weekly standup is
+a meeting on Tuesday rather than one row with a rule attached. All-day events
+come back as a bare date and are read as "all day", never as midnight.
+Unreachable, unauthorised, or an API switched off in the Cloud Console each
+get one honest sentence — never a stack trace, never a false success.
+
+Verify with `python calendar_test.py` (`--offline` for the phrasing and date
+maths alone, which needs nothing at all).
 
 ### athena/memory.py — long-term memory (DONE)
 Supabase (free cloud Postgres) `interactions` table; the schema SQL is in

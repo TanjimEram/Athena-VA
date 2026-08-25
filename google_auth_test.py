@@ -5,7 +5,7 @@ document or email feature.
     python google_auth_test.py --reset   # forget the sign-in and start over
 
 The first run opens a browser consent screen. Pick the Google account you
-want Athena to use and approve all four permissions. After that the sign-in
+want Athena to use and approve every permission it asks for. After that the sign-in
 is cached in google_token.json (gitignored) and no browser opens again.
 
 Needs GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env - see .env.example
@@ -24,6 +24,7 @@ SCOPE_NAMES = {
     "https://www.googleapis.com/auth/gmail.readonly": "read your email",
     "https://www.googleapis.com/auth/gmail.compose": "draft and send email",
     "https://www.googleapis.com/auth/spreadsheets": "read and edit your spreadsheets",
+    "https://www.googleapis.com/auth/calendar.events": "read and manage your calendar events",
 }
 
 
@@ -46,8 +47,8 @@ if __name__ == "__main__":
         sys.exit(1)
     line("credentials in .env", True)
 
-    print("\nSigning in (a browser window may open - approve all four "
-          "permissions)...\n")
+    print("\nSigning in (a browser window may open - approve every "
+          "permission it asks for)...\n")
     result = google_auth.check_connection(interactive=True)
 
     line("signed in", bool(result["account"]), result["account"] or result["detail"])

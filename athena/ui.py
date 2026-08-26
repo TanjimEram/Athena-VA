@@ -36,6 +36,10 @@ MONITOR_DEFAULTTONEAREST = 2
 
 STATE_FILE = Path(__file__).resolve().parent.parent / ".athena_ui_state.json"
 APP_HTML = Path(__file__).resolve().parent.parent / "assets" / "ui" / "app.html"
+# A real multi-resolution .ico (16 through 256). Windows needs a genuine ICO,
+# square - the first file supplied here was a 612x408 PNG with the extension
+# renamed, which Windows ignores silently.
+APP_ICON = APP_HTML.parent / "athena.ico"
 
 STATES = ("idle", "listening", "thinking", "speaking", "confirm")
 
@@ -186,7 +190,15 @@ def start(main_fn=None, debug: bool = False) -> None:
     )
     _window.events.loaded += _on_loaded
     try:
-        webview.start(func=main_fn, debug=debug)
+        # The taskbar/app icon. The window is frameless, so there is no title
+        # bar to show it - this is what Alt-Tab and the taskbar pick up.
+        # Passed only if the file is really there: a missing icon must not
+        # stop the window opening, and pywebview raises if the path is bad.
+        if APP_ICON.exists():
+            webview.start(func=main_fn, debug=debug, icon=str(APP_ICON))
+        else:
+            print(f"[ui] no icon at {APP_ICON} - starting without one")
+            webview.start(func=main_fn, debug=debug)
     finally:
         _window = None
         _loaded.clear()

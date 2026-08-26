@@ -14,6 +14,11 @@
 <head>
 <meta charset="utf-8">
 <title>Athena</title>
+<!-- Dev convenience ONLY: this shows a tab icon when app.html is opened in a
+     browser to work on the layout. pywebview has no tab, so it does nothing
+     in the real window - the app/taskbar icon is set in ui.py via
+     webview.start(icon=...). -->
+<link rel="icon" type="image/x-icon" href="athena.ico">
 <style>
   :root {
     --bg: #05080c; --panel: #080d13; --accent: #4fd6e8;
@@ -94,7 +99,14 @@
   }
   .label { font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); }
   #topbar { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
-  .brand { display: flex; align-items: baseline; gap: 12px; }
+  /* The mark centres on the header; ATHENA and its subtitle keep the baseline
+     relationship they had, so nesting the text rather than flattening it. */
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand-text { display: flex; align-items: baseline; gap: 12px; }
+  /* Sized to the 44px header. The file is 112px wide, so it stays crisp at
+     200% and 300% display scaling. No blend mode: the PNG carries real
+     alpha, so it sits on any background - see docs/architecture.md. */
+  #brand-mark { height: 28px; width: auto; flex: 0 0 auto; display: block; }
   .word { color: var(--accent); font-size: 15px; letter-spacing: 0.5em; }
   .sub { font-size: 9px; letter-spacing: 0.2em; color: var(--dim); }
   .meta { display: flex; align-items: center; gap: 14px; font-size: 10px; letter-spacing: 0.15em; color: var(--dim); }
@@ -238,7 +250,10 @@
 
   <div id="dashboard-view">
     <header id="topbar">
-      <div class="brand"><span class="word">ATHENA</span><span class="sub">// WINDOWS VOICE ASSISTANT</span></div>
+      <div class="brand">
+        <img id="brand-mark" src="athena-mark.png" alt="">
+        <span class="brand-text"><span class="word">ATHENA</span><span class="sub">// WINDOWS VOICE ASSISTANT</span></span>
+      </div>
       <div class="meta">
         <span id="hud-state">AWAITING</span><span class="sep">|</span>
         <span id="hud-wake">WAKE: &mdash;</span><span class="sep">|</span>

@@ -846,6 +846,39 @@ speak_stream(chunks, on_level=None, on_sentence=None) -> float | None
 warmup() -> None   # call at startup: mixer + loop + throwaway synthesis
 ```
 
+### Branding assets — assets/ui/ (DONE)
+| file | what it is |
+|---|---|
+| `a.png`, `owl.png` | the supplied source art, untouched |
+| `athena-mark.png` | the A mark with **real alpha**, for the dashboard header |
+| `athena.ico` | a genuine multi-resolution ICO (16→256), the app/taskbar icon |
+| `athena-source.png` | the original art the ICO was built from |
+
+**Why alpha and not `mix-blend-mode: screen`.** The source art has no
+transparency, and the obvious trick is to screen it over the dark UI. Measured
+against the real `#0a1420` background, it does not work: the art's backdrop is
+dark *blue*, not black — RGB(4,12,33) for the A mark — so screening lifts it
+to RGB(13,31,60) and leaves a **+29/255 blue rectangle** around the mark.
+Alpha is derived instead by keying on luminance (transparent below 45, curved
+above), which composites correctly on any backdrop and survives a theme
+change. `#brand-mark` is therefore `mix-blend-mode: normal`.
+
+The header is 44px and the mark displays at 28px from a 112px file — 3.9
+device pixels per CSS pixel, so it stays crisp to 300% display scaling.
+
+**The icon is set in `ui.py`**, not in the HTML: `webview.start(icon=...)`,
+guarded by `APP_ICON.exists()` because pywebview raises on a bad path and a
+missing icon must never stop the window opening. The window is frameless, so
+this is what the taskbar and Alt-Tab show. `app.html` also carries a
+`<link rel="icon">`, which does **nothing** in pywebview — there is no tab —
+and exists only for opening the page in a browser while working on layout.
+
+**The orb keeps its existing graphic.** The A mark was tested at the orb's
+real size and rejected: `#orb` is 74px, so the mark would sit at ~44px, where
+it reads as a blue smudge rather than an A. It needs ~60px to be legible,
+which crowds the 74px border and collides with the `#dot`/`#arc`/`#bars`
+state animations.
+
 ### athena/ui.py — the two-mode UI (DONE: single-page app.html)
 ONE pywebview window loading ONE page, `assets/ui/app.html`, which holds
 both `#orb-view` (96x96 colour-keyed chathead) and `#dashboard-view` (1150x700

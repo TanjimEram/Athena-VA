@@ -153,6 +153,18 @@ def _acknowledge() -> str:
 
 # --- what is still unanswered ----------------------------------------------
 
+def _record(event_id: str, status: str) -> None:
+    """Write an answer to the store, and never let the store stop the
+    conversation. This is called from the middle of a spoken exchange; if
+    Supabase is gone, or the module has been swapped for something that
+    misbehaves, the worst acceptable outcome is asking the same question
+    again another day - not raising into the assistant loop."""
+    try:
+        event_status.record_async(event_id, status)
+    except Exception as exc:
+        print(f"[followup] couldn't record {status} for {event_id}: {exc!r}")
+
+
 def _declined(event: dict) -> bool:
     """True if the user turned this invitation down. Nobody wants to be asked
     whether they went to a meeting they said no to."""
@@ -189,8 +201,10 @@ def pending_followups() -> list:
             continue
         # It has to have FINISHED, not merely started - asking about a
         # meeting someone is sitting in would be its own kind of rude.
-        finish = event.get("end", {}).get("dateTime")
-        if finish and datetime.datetime.fromisoformat(finish) > right_now:
+        # _parsed rather than fromisoformat: an unreadable end time must not
+        # raise out of here and into the startup path.
+        finish = cal._parsed(event.get("end", {}).get("dateTime"))
+        if finish and finish > right_now:
             continue
         past.append(event)
 
@@ -216,11 +230,11 @@ def _ask_about(event: dict) -> str:
     if verdict is None:
         # Silence, or they said something else entirely. Record it so we
         # never ask again, and stop - pressing on would be chasing.
-        event_status.record_async(event["id"], "deferred")
+        _record(event["id"], "deferred")
         return "stop"
 
     if verdict:
-        event_status.record_async(event["id"], "done")
+        _record(event["id"], "done")
         _say(_acknowledge())
         return "answered"
 
@@ -228,19 +242,19 @@ def _ask_about(event: dict) -> str:
     wants_move = _yes_or_no(_hear())
 
     if wants_move is None:
-        event_status.record_async(event["id"], "deferred")
+        _record(event["id"], "deferred")
         return "stop"
 
     if not wants_move:
         # They said no. Record it and move on WITHOUT COMMENT - anything
         # said here is either a platitude or a judgement.
-        event_status.record_async(event["id"], "skipped")
+        _record(event["id"], "skipped")
         return "answered"
 
     _say("When should I move it to?")
     phrase = _hear()
     if not phrase:
-        event_status.record_async(event["id"], "deferred")
+        _record(event["id"], "deferred")
         return "stop"
 
     # Resolved here only to find out whether it CAN be resolved - if not, we
@@ -253,7 +267,7 @@ def _ask_about(event: dict) -> str:
         _say(problem)
         phrase = _hear()
         if not phrase or cal.resolve_when(phrase)[1]:
-            event_status.record_async(event["id"], "deferred")
+            _record(event["id"], "deferred")
             return "stop"
 
     # By event, not by title: "Standup" also matches tomorrow's. And
@@ -262,7 +276,7 @@ def _ask_about(event: dict) -> str:
     said = cal.reschedule_event(title, phrase, event=event)
     _say(said)
     if said.startswith("Moved -"):
-        event_status.record_async(event["id"], "rescheduled")
+        _record(event["id"], "rescheduled")
         return "answered"
     # The move didn't happen, so nothing is recorded as though it did. The
     # event stays pending and can be asked about again another day.

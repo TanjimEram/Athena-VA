@@ -807,6 +807,27 @@ checks the whole project for four-step gaps — a skill with no schema is
 invisible to the model, and a schema with no tier is *blocked* by
 `safety.classify` at the moment someone asks for it.
 
+**Under failure**, every public function returns a speakable sentence, never
+raises, and never claims to have done what it did not. `_failure_sentence`
+recognises the API being switched off, a missing permission, an expired
+sign-in, rate limiting and a dead network, each with its own fix in the
+wording. The catch-all deliberately does **not** read the raw error out —
+Google's messages are written for a log, not for a room ("Invalid
+Credentials", "[Errno 11001] getaddrinfo failed") — so the detail goes to the
+console and the room hears one sentence.
+
+`_parsed` is the boundary where Google's data becomes ours: an unreadable
+timestamp yields `None` instead of a `ValueError`, and an event we cannot
+place in time is dropped from a spoken schedule rather than read out with no
+time, which would imply it is on the day being asked about. `followup._record`
+wraps every store write for the same reason — losing a record means one
+question is asked twice, while raising would stop a conversation dead.
+
+Verify with `python calendar_failure_test.py` (66 checks, offline): seven
+failure modes × every public function, plus malformed responses, plus the
+write-fails-after-the-yes case, which is the one that matters — a write
+reported as a success the user then relies on is worse than any crash.
+
 ### athena/tts.py — text to speech (DONE, streaming pipeline)
 edge-tts (online, voice in `config.TTS_VOICE`) + pygame at 24 kHz with a
 small buffer. speak_stream is a 3-stage chain (sentence splitter -> synth

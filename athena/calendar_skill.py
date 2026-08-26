@@ -588,22 +588,57 @@ def _service():
     return service, ""
 
 
+# Fragments that identify a failure, in the wording the libraries really use.
+# `getaddrinfo failed` is here because it is what a dead DNS entry actually
+# says on Windows, and it matches none of the obvious words like "network" or
+# "connection" - it was falling through to the catch-all and being read aloud
+# as "[Errno 11001] getaddrinfo failed".
+_NETWORK_MARKERS = ("network", "resolve", "unreachable", "timed out",
+                    "timeout", "connection", "getaddrinfo", "errno", "socket",
+                    "ssl", "eof occurred", "name or service not known",
+                    "temporarily unavailable", "broken pipe")
+_DISABLED_MARKERS = ("has not been used", "is disabled", "disabled")
+_PERMISSION_MARKERS = ("insufficient", "scope", "permission_denied",
+                       "forbidden")
+_EXPIRED_MARKERS = ("invalid credentials", "invalid_grant", "unauthorized",
+                    "token has been expired", "invalid authentication")
+_BUSY_MARKERS = ("rate limit", "quota", "too many requests", "backend error",
+                 "user rate", "429")
+
+
 def _failure_sentence(exc: Exception, doing: str = "read your calendar") -> str:
-    """One spoken sentence for a call that didn't come back. Never a stack
-    trace, and never a claim that it worked - a write that failed says so."""
+    """One spoken sentence for a call that didn't come back.
+
+    `doing` completes "I couldn't ___", so it reads correctly for a read and
+    for a write alike. Never a stack trace, never an error code, and never a
+    claim that it worked - a write that failed says so.
+
+    The catch-all deliberately does NOT read the raw error out. Google's
+    messages are written for a log, not for a room: "Invalid Credentials",
+    "[Errno 11001] getaddrinfo failed". The detail goes to the console, where
+    whoever is debugging can see all of it."""
     detail = google_auth._short(exc)
     lowered = detail.lower()
-    if "insufficient" in lowered or "scope" in lowered or "403" in lowered:
-        return (f"Google wouldn't let me {doing} - that permission hasn't "
-                "been granted yet. Sign in once more and try again.")
-    if any(word in lowered for word in
-           ("network", "resolve", "unreachable", "timed out", "connection")):
-        return (f"I couldn't reach your calendar just now, so I didn't {doing} "
-                "- it looks like the network is down.")
-    if "has not been used" in lowered or "disabled" in lowered:
+
+    # Order matters: the "API not enabled" message is itself a 403, so it has
+    # to be recognised before the permission check claims it.
+    if any(marker in lowered for marker in _DISABLED_MARKERS):
         return ("The Google Calendar API isn't switched on for this project "
                 f"yet, so I couldn't {doing}.")
-    return f"I couldn't {doing}: {detail}"
+    if any(marker in lowered for marker in _PERMISSION_MARKERS):
+        return (f"Google wouldn't let me {doing} - that permission hasn't "
+                "been granted yet. Sign in once more and try again.")
+    if any(marker in lowered for marker in _EXPIRED_MARKERS):
+        return (f"I couldn't {doing} - the Google sign-in has expired. Run "
+                "the sign-in again and I'll be able to.")
+    if any(marker in lowered for marker in _BUSY_MARKERS):
+        return (f"I couldn't {doing} - Google's had too many requests from me "
+                "just now. Try again in a moment.")
+    if any(marker in lowered for marker in _NETWORK_MARKERS):
+        return f"I couldn't {doing} - it looks like the network is down."
+
+    print(f"[calendar] unrecognised failure while trying to {doing}: {detail}")
+    return f"I couldn't {doing} - something went wrong at Google's end."
 
 
 def _load(start, end, query: str | None = None, limit: int = 50):
@@ -636,15 +671,36 @@ def _title(event: dict) -> str:
     return (event.get("summary") or "").strip() or "an untitled event"
 
 
+def _parsed(stamp: str):
+    """One RFC3339 stamp as a local datetime, or None if it isn't one.
+
+    Never lets a bad value out of the module. This is the boundary where
+    someone else's data becomes ours, and `fromisoformat` raises on anything
+    it doesn't like - which took a ValueError all the way out of
+    read_schedule and into the assistant loop before it was caught."""
+    if not stamp:
+        return None
+    try:
+        return datetime.datetime.fromisoformat(stamp).astimezone(local_zone())
+    except (ValueError, TypeError):
+        print(f"[calendar] couldn't read the time {stamp!r} - skipping it")
+        return None
+
+
 def _starts_at(event: dict):
     """(when it starts, is it an all-day event). All-day events come back as
-    a bare date with no time at all, and must not be read out as midnight."""
+    a bare date with no time at all, and must not be read out as midnight.
+    (None, False) for anything we can't make sense of - callers already skip
+    that, and a spoken answer missing one event beats no answer at all."""
     start = event.get("start", {})
     if start.get("dateTime"):
-        moment = datetime.datetime.fromisoformat(start["dateTime"])
-        return moment.astimezone(local_zone()), False
+        return _parsed(start["dateTime"]), False
     if start.get("date"):
-        return _start_of_day(datetime.date.fromisoformat(start["date"])), True
+        try:
+            return _start_of_day(datetime.date.fromisoformat(start["date"])), True
+        except (ValueError, TypeError):
+            print(f"[calendar] couldn't read the date {start['date']!r}")
+            return None, False
     return None, False
 
 
@@ -669,6 +725,11 @@ def _join(phrases: list[str]) -> str:
 def _describe(events: list, label: str, group_by_day: bool, empty: str) -> str:
     """The spoken answer for a list of events. Caps the list, groups by day
     when it spans more than one, and says how many it left out."""
+    # An event whose time we couldn't read has no place on a spoken schedule:
+    # reading its title with no time implies it is on the day being asked
+    # about, which is exactly what we don't know. _parsed has already said so
+    # on the console.
+    events = [event for event in events if _starts_at(event)[0] is not None]
     if not events:
         return empty
 
@@ -738,18 +799,19 @@ def next_event() -> str:
     """The next thing coming up, whenever it is."""
     start = now()
     end = start + datetime.timedelta(days=NEXT_EVENT_HORIZON_DAYS)
-    events, problem = _load(start, end, limit=1)
+    # A handful rather than one, so an event with an unreadable time doesn't
+    # become the answer - we skip to the next one we can actually place.
+    events, problem = _load(start, end, limit=5)
     if problem:
         return problem
-    if not events:
+    readable = [event for event in events if _starts_at(event)[0] is not None]
+    if not readable:
         return ("You have nothing scheduled in the next "
                 f"{NEXT_EVENT_HORIZON_DAYS} days.")
 
-    event = events[0]
+    event = readable[0]
     moment, all_day = _starts_at(event)
     today = start.date()
-    if moment is None:
-        return f"Next up is {_title(event)}."
     day = _day_label(moment.date(), today)
     if all_day:
         return f"Next up is {_title(event)}, all day {day}."
@@ -807,13 +869,14 @@ def find_event(query: str) -> str:
 # --- finding the one event they meant --------------------------------------
 
 def _length_of(event: dict) -> datetime.timedelta | None:
-    """How long an event runs, or None if it has no real start and end."""
-    start = event.get("start", {}).get("dateTime")
-    end = event.get("end", {}).get("dateTime")
+    """How long an event runs, or None if it has no readable start and end.
+    None makes reschedule_event fall back to the default hour, which is a
+    worse guess than the real length but a far better one than a crash."""
+    start = _parsed(event.get("start", {}).get("dateTime"))
+    end = _parsed(event.get("end", {}).get("dateTime"))
     if not (start and end):
         return None
-    return (datetime.datetime.fromisoformat(end)
-            - datetime.datetime.fromisoformat(start))
+    return end - start
 
 
 def _find_by_title(identifier: str):

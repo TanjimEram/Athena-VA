@@ -119,8 +119,17 @@ def record(event_id: str, status: str) -> bool:
 def record_async(event_id: str, status: str) -> None:
     """Fire-and-forget on a background thread, so writing to the cloud never
     adds latency to what Athena is saying. Same pattern as
-    memory.log_interaction_async, and for the same reason."""
-    threading.Thread(target=record, args=(event_id, status), daemon=True).start()
+    memory.log_interaction_async, and for the same reason.
+
+    Starting a thread can itself fail when a machine is out of them, and this
+    is called from the middle of a spoken exchange - so even that is caught.
+    Losing a record means one question gets asked twice; raising here would
+    stop the conversation dead."""
+    try:
+        threading.Thread(target=record, args=(event_id, status),
+                         daemon=True).start()
+    except Exception as exc:
+        _warn_once(f"couldn't start the background write ({exc})")
 
 
 def recorded_ids(event_ids: list) -> set:

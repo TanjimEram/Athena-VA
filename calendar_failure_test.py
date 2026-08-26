@@ -72,7 +72,10 @@ class GoogleError(Exception):
 # Every way this can go wrong, in the wording Google really uses.
 FAILURES = {
     "the API is switched off in the Cloud Console": GoogleError(
-        "Google Calendar API has not been used in project 874924012270 before "
+        # A stand-in project number: the real one identifies someone's Cloud
+        # project and this file is public. The wording is what matters here,
+        # since _failure_sentence matches on "has not been used".
+        "Google Calendar API has not been used in project 000000000000 before "
         "or it is disabled.", 403),
     "the permission was never granted": GoogleError(
         "Request had insufficient authentication scopes.", 403),

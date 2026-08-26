@@ -332,6 +332,71 @@ def apply_sheet_operation(natural_language_request: str) -> str:
     return sheets.apply_sheet_operation(natural_language_request)
 
 
+# --- calendar (Google Calendar) ---
+# Lazy imports again: calendar_skill pulls in the Google client, and most
+# turns never touch the calendar.
+
+def get_current_time() -> str:
+    """The local time and date, said the way a person says it."""
+    from athena import calendar_skill
+    return calendar_skill.get_current_time()
+
+
+def read_schedule(when: str = "today") -> str:
+    """What's on today, tomorrow, this week, or on a named date."""
+    from athena import calendar_skill
+    print(f"[skills] reading the schedule for: {when!r}")
+    return calendar_skill.read_schedule(when)
+
+
+def next_event() -> str:
+    from athena import calendar_skill
+    return calendar_skill.next_event()
+
+
+def find_event(query: str) -> str:
+    from athena import calendar_skill
+    print(f"[skills] finding event: {query!r}")
+    return calendar_skill.find_event(query)
+
+
+def create_event(title: str, start: str, end: str = "",
+                 description: str = "") -> str:
+    """Book something. calendar_skill resolves the time, reads the title and
+    the RESOLVED time back, and refuses without an explicit yes - see
+    calendar_skill.create_event."""
+    from athena import calendar_skill
+    print(f"[skills] create_event requested: {title!r} at {start!r}")
+    return calendar_skill.create_event(title, start, end or None,
+                                       description or None)
+
+
+def reschedule_event(event_identifier: str, new_start: str,
+                     new_end: str = "") -> str:
+    """Move an event. Reads the move back both ways round and waits for a yes."""
+    from athena import calendar_skill
+    print(f"[skills] reschedule_event requested: {event_identifier!r} "
+          f"-> {new_start!r}")
+    return calendar_skill.reschedule_event(event_identifier, new_start,
+                                           new_end or None)
+
+
+def cancel_event(event_identifier: str) -> str:
+    """Delete an event. Reads it back and waits for a yes."""
+    from athena import calendar_skill
+    print(f"[skills] cancel_event requested: {event_identifier!r}")
+    return calendar_skill.cancel_event(event_identifier)
+
+
+def pending_followups() -> str:
+    """Ask about events whose time has passed - 'what did I miss'. Free tier:
+    asking is not a write. Anything it goes on to MOVE still goes through
+    reschedule_event's own gate."""
+    from athena import followup
+    print("[skills] running follow-ups on request")
+    return followup.run()
+
+
 def see_screen(question: str, focus: str = "screen") -> str:
     """Look at the user's screen (or just the active window) and answer a
     question about what's shown. focus is 'screen' or 'window'."""
@@ -430,6 +495,14 @@ SKILLS = {
     "autosize_columns": autosize_columns,
     "undo_last_change": undo_last_change,
     "apply_sheet_operation": apply_sheet_operation,
+    "get_current_time": get_current_time,
+    "read_schedule": read_schedule,
+    "next_event": next_event,
+    "find_event": find_event,
+    "create_event": create_event,
+    "reschedule_event": reschedule_event,
+    "cancel_event": cancel_event,
+    "pending_followups": pending_followups,
     "open_dashboard": open_dashboard,
     "close_dashboard": close_dashboard,
 }

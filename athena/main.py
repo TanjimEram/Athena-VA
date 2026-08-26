@@ -342,6 +342,20 @@ def assistant_loop() -> None:
     ui.set_state("idle")  # waits for the window to finish loading
     ui.add_log("athena online - say 'hey jarvis'", "free")
 
+    # Follow-ups, once, here. This is the ONLY automatic trigger in the whole
+    # feature - there is no timer anywhere, because a question that arrives
+    # mid-conversation is an interruption however well it is worded. Gated by
+    # followup_on_startup (default True) so a demo starts clean, silent when
+    # there is nothing outstanding, and wrapped because nothing about asking
+    # "did you go to the dentist" may ever stop Athena listening.
+    try:
+        from athena import followup      # lazy: pulls in the Google client
+        summary = followup.on_startup()
+        if summary:
+            speak(summary)
+    except Exception as exc:
+        print(f"[main] startup follow-up failed, carrying on: {exc!r}")
+
     while _running.is_set():
         try:
             ui.set_state("idle")
@@ -410,6 +424,19 @@ def main() -> None:
     # waits for a yes. Without this it states the plan and does nothing.
     from athena import sheets
     sheets.set_confirm(_chain_confirm)
+    # Calendar writes read the title and the RESOLVED time back and wait for
+    # a yes, through the same confirm. Without this, calendar_skill refuses
+    # every write rather than guessing.
+    from athena import calendar_skill
+    calendar_skill.set_confirm(_chain_confirm)
+    # Follow-ups speak and listen through the UI-aware helpers, so the orb
+    # reacts while she asks whether you did the thing.
+    from athena import followup
+    followup.set_io(
+        speak_fn=speak,
+        listen_fn=lambda: hear(max_seconds=float(
+            settings.get("followup_seconds", 6))))
+    followup.reset_session()
     ui.on_typed_input = _on_typed
     ui.on_confirm = _on_confirm_click
     # ui.on_orb_click stays default: click expands to the dashboard.

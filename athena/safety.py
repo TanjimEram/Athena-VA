@@ -10,7 +10,12 @@ FREE = {"open_app", "open_website", "web_search", "get_system_info", "see_screen
         "list_recent_emails", "summarize_emails",
         # Spreadsheets: looking, not touching. use_tab only moves a pointer.
         "open_spreadsheet", "list_tabs", "use_tab", "read_range",
-        "describe_sheet", "count_matching"}
+        "describe_sheet", "count_matching",
+        # Calendar: reading only. pending_followups belongs here because
+        # ASKING is not a write - and if the user then says "move it", that
+        # move goes through reschedule_event and is gated on its own.
+        "get_current_time", "read_schedule", "next_event", "find_event",
+        "pending_followups"}
 CONFIRM = {"set_volume", "lock_screen",
            # These write something the user will see and have to undo.
            "create_document", "write_to_document", "write_local_docx",
@@ -30,7 +35,15 @@ CONFIRM = {"set_volume", "lock_screen",
            # These three read their plan back before doing anything:
            # delete_* through brain.CONFIRM_PHRASING, apply_sheet_operation
            # inside sheets.py (so it's in brain.SELF_CONFIRMING too).
-           "delete_rows", "delete_columns", "apply_sheet_operation"}
+           "delete_rows", "delete_columns", "apply_sheet_operation",
+           # Every calendar write. Like send_email these are in
+           # brain.NEVER_BATCHED, so an event can never be created as an
+           # incidental step in a chain approved for something else. They are
+           # also in brain.SELF_CONFIRMING: the read-back happens inside
+           # calendar_skill, because only that module knows what "tomorrow at
+           # 3" resolved to - confirming the raw words would confirm the
+           # mishearing rather than catch it.
+           "create_event", "reschedule_event", "cancel_event"}
 BLOCKED: set[str] = set()  # nothing blocked yet
 
 

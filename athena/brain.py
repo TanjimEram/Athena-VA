@@ -686,6 +686,152 @@ TOOLS = [
             },
         },
     },
+    # --- calendar ---
+    # The time arguments are passed through AS THE USER SAID THEM. Do not ask
+    # the model to compute a date: calendar_skill.resolve_when does that, and
+    # it is the only thing that knows what "tomorrow at 3" means here. A model
+    # that guesses a timestamp guesses in its own time zone.
+    {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": ("The current local time and date - 'what time is "
+                            "it', 'what's the date today'."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read_schedule",
+            "description": ("Read the calendar aloud - 'what's on today', "
+                            "'what does my week look like', 'am I free "
+                            "tomorrow', 'what's on Friday'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "when": {
+                        "type": "string",
+                        "description": ("Which day, in the user's own words: "
+                                        "'today', 'tomorrow', 'this week', "
+                                        "'Friday', '3 September'. Defaults to "
+                                        "today."),
+                    },
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "next_event",
+            "description": ("The next thing coming up - 'what's next', "
+                            "'what have I got coming up'."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "find_event",
+            "description": ("Find an event by name - 'when's my dentist "
+                            "appointment', 'do I have a meeting with Sam'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string",
+                              "description": "Words from the event's title."},
+                },
+                "required": ["query"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_event",
+            "description": ("Put something in the calendar - 'book a dentist "
+                            "appointment tomorrow at 3', 'put lunch with Sam "
+                            "in for Friday'. Pass the time exactly as the "
+                            "user said it; do NOT convert it to a date."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string",
+                              "description": "What the event is called."},
+                    "start": {
+                        "type": "string",
+                        "description": ("When it starts, in the user's own "
+                                        "words: 'tomorrow at 3', 'next Monday "
+                                        "morning', 'in two hours', 'Friday at "
+                                        "7pm'. Never a timestamp."),
+                    },
+                    "end": {
+                        "type": "string",
+                        "description": ("Optional. An end time ('5pm') or a "
+                                        "length ('for two hours'). Leave it "
+                                        "out for the default hour."),
+                    },
+                    "description": {"type": "string",
+                                    "description": "Optional notes."},
+                },
+                "required": ["title", "start"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "reschedule_event",
+            "description": ("Move an existing event - 'push my dentist "
+                            "appointment to Friday', 'move standup to 10'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_identifier": {
+                        "type": "string",
+                        "description": "Words from the event's title.",
+                    },
+                    "new_start": {
+                        "type": "string",
+                        "description": ("The new time, in the user's own "
+                                        "words. Never a timestamp."),
+                    },
+                    "new_end": {"type": "string",
+                                "description": "Optional new end time."},
+                },
+                "required": ["event_identifier", "new_start"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "cancel_event",
+            "description": ("Delete an event - 'cancel my dentist "
+                            "appointment', 'drop the 3 o'clock'."),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "event_identifier": {
+                        "type": "string",
+                        "description": "Words from the event's title.",
+                    },
+                },
+                "required": ["event_identifier"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "pending_followups",
+            "description": ("Ask about events whose time has passed - 'what "
+                            "did I miss', 'check my tasks', 'did I do "
+                            "everything today'."),
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
 ]
 
 
@@ -830,7 +976,12 @@ def _think(user_text: str, history: list | None = None) -> dict:
             args=args,
         )
 
-    if verdict == "confirm":
+    # SELF_CONFIRMING tools ask in their own words, so they fall through and
+    # run - their gate is inside the skill and is unconditional. Asking here
+    # too would ask twice, and the generic phrasing below reads back the RAW
+    # arguments: "create event with start tomorrow at 3" confirms the words
+    # we might have misheard instead of the time they resolved to.
+    if verdict == "confirm" and tool_name not in SELF_CONFIRMING:
         pretty_args = ", ".join(f"{k} {v}" for k, v in args.items()) or "that"
         return _result(
             f"Just to confirm, you want me to {tool_name.replace('_', ' ')}"
@@ -928,7 +1079,10 @@ def think_stream(user_text: str, history: list | None = None):
             verdict = safety.classify(tool_name)
             if verdict == "blocked":
                 text = f"Sorry, I'm not allowed to do that. {tool_name} is off-limits for me."
-            elif verdict == "confirm":
+            elif verdict == "confirm" and tool_name not in SELF_CONFIRMING:
+                # Same as the non-streaming path above: a self-confirming
+                # tool does its own asking, in words that name what the
+                # arguments actually resolved to.
                 pretty = ", ".join(f"{k} {v}" for k, v in args.items()) or "that"
                 text = (
                     f"Just to confirm, you want me to {tool_name.replace('_', ' ')}"
@@ -1020,13 +1174,23 @@ NEVER_BATCHED = {
     "highlight_rows_where", "add_formula", "insert_rows", "insert_columns",
     "delete_rows", "delete_columns", "move_rows", "freeze_header",
     "autosize_columns", "undo_last_change", "apply_sheet_operation",
+    # Every calendar write, for the same reason as send_email: an event must
+    # never appear in someone's calendar as an incidental step in a chain
+    # they approved for something else.
+    "create_event", "reschedule_event", "cancel_event",
 }
 
 # Tools that ask for their own confirmation, in their own words. Still
 # confirm-tier: the asking is just delegated so the user isn't asked twice,
 # and so the question doesn't read an entire email body aloud. The delegated
 # gate is unconditional inside the skill, so this can't weaken it.
-SELF_CONFIRMING = {"send_email", "apply_sheet_operation"}
+SELF_CONFIRMING = {"send_email", "apply_sheet_operation",
+                   # The calendar writes ask in their own words because only
+                   # calendar_skill knows what the time RESOLVED to. The
+                   # generic phrasing would read back "tomorrow at 3" - the
+                   # words we might have misheard - instead of "three o'clock
+                   # tomorrow afternoon", which is the whole point of asking.
+                   "create_event", "reschedule_event", "cancel_event"}
 
 
 def run_agent(user_text: str, history: list | None = None,
@@ -1380,11 +1544,32 @@ def _handle_call(call, confirm, declined: set, ran_sigs: dict,
         step["result"] = f"Not allowed: {tool} is off-limits."
         return step, NOT_DONE, False
 
-    # Refuse to run an irreversible tool that arrived bundled with others.
-    if in_batch and tool in NEVER_BATCHED:
+    # Refuse to run an irreversible tool that isn't the only thing happening
+    # this turn.
+    #
+    # `in_batch` alone was not enough, and the calendar found the hole: the
+    # model also CHAINS actions across rounds, so "tell me the system info
+    # and book lunch tomorrow at 1" put get_system_info in round one and
+    # create_event in round two, and the write sailed straight through the
+    # guard. That is precisely the case this set exists to stop - one
+    # approval the user only half heard, carrying an action they didn't
+    # separately agree to.
+    #
+    # `ran_sigs` is non-empty as soon as anything has run this turn, so it
+    # catches the chained case as well as the bundled one. It also catches
+    # the RETRY: the model reads "I haven't added Lunch" as a failure and
+    # tries again with cosmetically different arguments (adding an empty
+    # description), which slips past the signature dedupe above. Left alone
+    # that ran create_event three times in one turn - three approvals asked,
+    # and with three yeses, three identical events.
+    if tool in NEVER_BATCHED and (in_batch or ran_sigs):
         step["status"] = "skipped"
-        step["result"] = ("I didn't do that as part of a multi-step request - "
-                          "ask me for it on its own.")
+        if any(key.startswith(tool + ":") for key in ran_sigs):
+            step["result"] = (f"I've already handled that this turn - I'm not "
+                              "doing it twice.")
+        else:
+            step["result"] = ("I didn't do that as part of a multi-step "
+                              "request - ask me for it on its own.")
         return step, NOT_DONE, False
 
     # Confirm-before-acting can be turned off in settings; then confirm-tier

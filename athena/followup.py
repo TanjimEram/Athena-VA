@@ -269,18 +269,21 @@ def _ask_about(event: dict) -> str:
     return "failed"
 
 
-def run(limit: int = MAX_PER_SESSION) -> str:
+def run(limit: int = MAX_PER_SESSION, pending: list | None = None) -> str:
     """Work through the pending follow-ups. Returns one spoken sentence.
 
     This is what both triggers call - startup and "what did I miss". It never
-    starts itself; something has to ask."""
+    starts itself; something has to ask. `pending` lets on_startup hand over
+    the list it already fetched rather than costing a second API call on the
+    slowest part of the session."""
     global _asked_this_session
 
     remaining = min(limit, MAX_PER_SESSION - _asked_this_session)
     if remaining <= 0:
         return "I've asked enough for one session - I'll leave the rest."
 
-    pending = pending_followups()
+    if pending is None:
+        pending = pending_followups()
     if not pending:
         return "Nothing's outstanding - you're all caught up."
 
@@ -315,5 +318,7 @@ def on_startup() -> str:
         pass                                   # settings unavailable: proceed
     pending = pending_followups()
     if not pending:
+        # Silence, not "you're all caught up" - nobody asked. That sentence
+        # is an answer to a question, and at startup there wasn't one.
         return ""
-    return run()
+    return run(pending=pending)

@@ -121,8 +121,17 @@ run_agent(user_text, history=None, on_step=None, confirm=None) -> dict
 run_confirmed(tool_name: str, args: dict) -> str
 # executes a confirm-level tool AFTER the user says yes; returns spoken result
 
-NEVER_BATCHED: set     # {"send_email"} - skipped if bundled with other calls
-SELF_CONFIRMING: set   # {"send_email"} - the skill asks in its own words
+NEVER_BATCHED: set     # send_email, every sheet edit, every calendar write.
+                       # Skipped unless it is the ONLY action of the turn -
+                       # bundled in one reply, chained after something else,
+                       # or retried by the model with drifted arguments.
+                       # `in_batch` alone missed the last two; the calendar
+                       # found that, and a retry had run create_event three
+                       # times in one turn before it was closed.
+SELF_CONFIRMING: set   # the skill asks in its own words. Honoured by BOTH
+                       # run_agent and think() - think() used to ask its own
+                       # generic question first, so these tools were confirmed
+                       # twice and the first read back the raw arguments.
 CONFIRM_PHRASING: dict # short yes/no wording per tool; the generic phrasing
                        # joins every argument, which would read a whole
                        # document or email body aloud before writing it
@@ -776,6 +785,27 @@ time so a demo can switch it off without a restart.
 Verify with `python followup_test.py` — 52 checks that script the entire
 conversation offline; `--live` creates one real past event, confirms it is
 found, and deletes it.
+
+**Wired in** (the four-step rule): all eight are in `skills.SKILLS`, have a
+`brain.TOOLS` schema, and carry a tier — free for `get_current_time`,
+`read_schedule`, `next_event`, `find_event` and `pending_followups`, confirm
+for `create_event`, `reschedule_event` and `cancel_event`. The three writes
+are also in `brain.NEVER_BATCHED` and `brain.SELF_CONFIRMING`. `main.py`
+wires `calendar_skill.set_confirm`, `followup.set_io`,
+`followup.reset_session`, and calls `followup.on_startup()` exactly once at
+the top of `assistant_loop`.
+
+**The schemas pass times through as spoken.** `create_event.start` is
+documented as "in the user's own words … Never a timestamp", because
+`resolve_when` is the only thing that knows what "tomorrow at 3" means on
+this machine — a model computing a date computes it in its own time zone.
+Verified live: "book a dentist appointment tomorrow at 3" arrives as
+`{'title': 'Dentist appointment', 'start': 'tomorrow at 3'}`.
+
+Verify with `python calendar_wiring_test.py` (86 checks, offline). It also
+checks the whole project for four-step gaps — a skill with no schema is
+invisible to the model, and a schema with no tier is *blocked* by
+`safety.classify` at the moment someone asks for it.
 
 ### athena/tts.py — text to speech (DONE, streaming pipeline)
 edge-tts (online, voice in `config.TTS_VOICE`) + pygame at 24 kHz with a

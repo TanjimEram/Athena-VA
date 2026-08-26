@@ -98,9 +98,11 @@ CAPABILITIES = (
     "system volume, lock the screen, report battery and system status, look at "
     "your screen to answer questions about it, guide you through on-screen "
     "tasks step by step, write documents for you in Google Docs or Word, "
-    "read, summarize, draft and send your email, and work on your Google "
+    "read, summarize, draft and send your email, work on your Google "
     "Sheets - sorting, filtering, colouring, formulas, adding and removing "
-    "rows, with an undo"
+    "rows, with an undo - and manage your calendar: read your schedule, book "
+    "and move and cancel events, and follow up on things whose time has "
+    "passed"
 )
 BRAIN_TEMPERATURE = 0.6
 # Low on purpose: replies are spoken aloud, so a hard cap keeps her to a

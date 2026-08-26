@@ -553,10 +553,10 @@ creates and deletes).
 
 Patterns used across the project are recorded in **docs/design-patterns.md**.
 
-### athena/calendar_skill.py — the calendar, spoken (Phase 1: READ-ONLY)
+### athena/calendar_skill.py — the calendar, spoken (Phases 1–2 DONE)
 Google Calendar through the API. Named `calendar_skill.py` so it can never be
-confused with the standard library's `calendar`. **Phase 1 writes nothing** —
-no create, no move, no cancel; those arrive in phase 2.
+confused with the standard library's `calendar`. Reading is free; creating,
+moving and cancelling are gated (below).
 
 **Saying it, not printing it.** The API deals in `2026-08-26T14:30:00+06:00`;
 a listener hears "half past two this afternoon". That translation is most of
@@ -586,23 +586,70 @@ themselves. Adding it invalidates any earlier sign-in on purpose
 the scope gets its own sentence ("signed in, but not yet for your calendar"),
 kept separate from "not signed in" because the fix is different.
 
+**"Tomorrow at 3" is resolved by `resolve_when`, in this module** — not by the
+model, and not by a library. That is a measured decision, not a preference.
+Run from a Wednesday at 13:15:
+
+| phrase | dateutil | dateparser | `resolve_when` |
+|---|---|---|---|
+| "tomorrow at 3" | 2026-08-03 13:15 | 2026-08-27 13:15 | Thu 15:00 |
+| "next Monday morning" | 2026-08-31 13:15 | `None` | Mon 09:00 |
+| "in two hours" | `ParserError` | 2026-08-26 15:15 | Wed 15:15 |
+| "Friday at 7pm" | 2026-08-28 19:15 | 2026-08-28 19:00 | Fri 19:00 |
+| "at 3" | 2026-08-03 13:15 | 2027-03-26 00:00 | Wed 15:00 |
+
+dateutil read the "3" of "tomorrow at 3" as a day of the month and produced a
+date three weeks in the **past**; dateparser dropped the "at 3" entirely.
+Neither raised. Silently wrong beats loudly unsure only if you never look, so
+this is ours: stdlib `datetime` + `re`, returning **either a moment or a
+question**, never a guess it can't justify. A day with no time asks "what time
+tomorrow?" rather than inventing 9am. Its one deliberate guess is the bare
+hour — **1–6 is the afternoon, 7–11 the morning, 12 is midday** — and the
+read-back exists to catch exactly that.
+
+**The confirm gate lives in this module** (`set_confirm`, as `mail.py` does),
+not only in `safety.py`. It has to: the model passes the raw words "tomorrow
+at 3", and only this module knows they mean three o'clock tomorrow afternoon.
+Reading the raw arguments back through `brain.CONFIRM_PHRASING` would confirm
+the mishearing rather than catch it. So these three are `SELF_CONFIRMING` —
+still confirm-tier, just asking in their own words. **With no hook wired every
+write refuses.** A clash doesn't block a booking; it changes the question, so
+a double-booking is something you agree to rather than discover. All-day
+events and anything the calendar marks free never count as a clash.
+
 ```python
 get_current_time() -> str            # local time and date, spoken naturally
 read_schedule(when="today") -> str   # today / tomorrow / this week / a date
 next_event() -> str
 find_event(query) -> str             # title match, not Google's whole-event q
 
+set_confirm(confirm_fn=None) -> None      # main.py injects confirm(q) -> bool
+create_event(title, start, end=None, description=None) -> str
+reschedule_event(event_identifier, new_start, new_end=None) -> str
+cancel_event(event_identifier) -> str
+
+resolve_when(text, base=None, roll_past=True)  # -> (datetime, "") | (None, q)
 timezone_name() -> str               # what zone we detected, for setup notes
 ```
+
+Events are identified by **title**: one match acts, none says so, several read
+the candidates back and ask which — never a pick made on the user's behalf.
+No end given means an hour; `end` also takes a duration ("for two hours").
+A reschedule keeps whatever length the event already had, so moving a two-hour
+meeting doesn't silently shrink it. No `timeZone` field is ever sent — the
+RFC3339 stamps carry their own offset.
 
 Recurring events are expanded with `singleEvents=True`, so a weekly standup is
 a meeting on Tuesday rather than one row with a rule attached. All-day events
 come back as a bare date and are read as "all day", never as midnight.
 Unreachable, unauthorised, or an API switched off in the Cloud Console each
-get one honest sentence — never a stack trace, never a false success.
+get one honest sentence — never a stack trace, and **a write that failed is
+never reported as a success**.
 
-Verify with `python calendar_test.py` (`--offline` for the phrasing and date
-maths alone, which needs nothing at all).
+Verify with `python calendar_test.py` (41 checks, `--offline` needs nothing at
+all) and `python calendar_write_test.py` (60 checks against a fake calendar
+that records every write, so a write escaping its gate shows up as a recorded
+call; `--live` creates, moves and deletes one throwaway event for real).
 
 ### athena/memory.py — long-term memory (DONE)
 Supabase (free cloud Postgres) `interactions` table; the schema SQL is in

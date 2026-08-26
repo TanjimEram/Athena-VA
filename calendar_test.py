@@ -55,8 +55,12 @@ def phrasing_checks() -> None:
     check("14:03 - an odd minute under ten gets the 'oh'",
           cal._spoken_clock(at(2026, 8, 26, 14, 3)), "two oh three")
     check("14:37", cal._spoken_clock(at(2026, 8, 26, 14, 37)), "two thirty-seven")
-    check("12:00 is noon, not zero",
-          cal._spoken_clock(at(2026, 8, 26, 12, 0)), "twelve o'clock")
+    check("12:00 names its own part of the day",
+          cal._spoken_clock(at(2026, 8, 26, 12, 0)), "midday")
+    check("...and so does 00:00",
+          cal._spoken_clock(at(2026, 8, 26, 0, 0)), "midnight")
+    check("midday never takes 'in the afternoon' after it",
+          cal._clock_and_part(at(2026, 8, 26, 12, 0)), "midday")
     check("00:30 is half past twelve, not half past zero",
           cal._spoken_clock(at(2026, 8, 26, 0, 30)), "half past twelve")
 

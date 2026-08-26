@@ -1,9 +1,18 @@
 """Athena's calendar, read aloud in plain English.
 
-Google Calendar through the API, never a driven browser. This phase is
-READ-ONLY: nothing here creates, moves or cancels anything. Every function
+Google Calendar through the API, never a driven browser. Every function
 returns one short honest sentence, because whatever it returns is what Athena
 says out loud.
+
+Reading is free. **Creating, moving and cancelling are gated**: each one
+resolves the time, reads the title and the resolved time back in plain words,
+and does nothing at all without an explicit yes. The gate lives INSIDE this
+module (`set_confirm`, as `mail.py` does) rather than only in `safety.py`,
+because the resolved time is not knowable outside it - the model hands us
+"tomorrow at 3" and only this module can say "three o'clock tomorrow
+afternoon". Reading the raw words back would defeat the point of the check.
+With no confirm hook wired in, every write refuses. A misheard time is caught
+before it reaches the calendar rather than after.
 
 Named `calendar_skill.py`, not `calendar.py`, so it can never be mistaken for
 the standard library's `calendar` module by a reader or a stray import.
@@ -24,11 +33,32 @@ their own offset and needs no IANA name from us.
 "this week" means from today through the coming Friday inclusive - see
 `_window`.
 
+**"Tomorrow at 3" is resolved HERE, not by the model, and not by a library.**
+`resolve_when` is stdlib `datetime` and `re`, and that is a decision with
+evidence behind it. Measured against the phrases this assistant actually
+hears, from a Wednesday at 13:15:
+
+    phrase                  dateutil                dateparser
+    "tomorrow at 3"         2026-08-03 13:15        2026-08-27 13:15
+    "next Monday morning"   2026-08-31 13:15        None
+    "in two hours"          ParserError             2026-08-26 15:15
+    "Friday at 7pm"         2026-08-28 19:15        2026-08-28 19:00
+    "at 3"                  2026-08-03 13:15        2027-03-26 00:00
+
+dateutil read the "3" of "tomorrow at 3" as a day of the month and put the
+event three weeks in the PAST; dateparser dropped the "at 3" and kept the
+current time. Neither raised. A calendar that is silently wrong is worse than
+one that says it doesn't understand, so we own this. `resolve_when` returns
+either a time or a question - never a guess it can't justify. Its one
+deliberate guess is the bare hour (see `_apply_meridiem`), and the read-back
+exists precisely to catch that one.
+
 Nothing here raises into the assistant loop. No sign-in, no calendar
 permission, no network: it says so in one sentence and Athena carries on.
 """
 
 import datetime
+import re
 
 from athena import google_auth
 
@@ -49,6 +79,20 @@ FIND_HORIZON_DAYS = 90
 # find_event looks a little way BACK too, because "when was my dentist thing"
 # is usually asked just after it happened.
 FIND_LOOKBACK_DAYS = 7
+
+# An event with no end given runs an hour.
+DEFAULT_DURATION_MINUTES = 60
+
+# main.py injects confirm(question) -> bool here. Until it does, every write
+# in this module refuses - see set_confirm.
+_confirm = None
+
+
+def set_confirm(confirm_fn=None) -> None:
+    """main.py wires in its confirm(question) -> bool here, the same one the
+    safety gate uses, so a booking can be approved by voice or by clicking."""
+    global _confirm
+    _confirm = confirm_fn
 
 
 # --- the local clock -------------------------------------------------------
@@ -110,6 +154,12 @@ def _ordinal(n: int) -> str:
 def _spoken_clock(moment: datetime.datetime) -> str:
     """The clock face in words: 'half past two', 'quarter to six',
     'ten past nine', 'seven o'clock', 'two thirty-seven'."""
+    # These two name their own part of the day, so they never take one -
+    # "twelve o'clock in the afternoon" is not how anyone says midday.
+    if moment.minute == 0 and moment.hour == 12:
+        return "midday"
+    if moment.minute == 0 and moment.hour == 0:
+        return "midnight"
     hour = moment.hour % 12 or 12
     following = (moment.hour + 1) % 12 or 12
     minute = moment.minute
@@ -147,9 +197,17 @@ def _part_of_day(moment: datetime.datetime) -> str:
 
 
 def _part_of_day_phrase(moment: datetime.datetime) -> str:
-    """'in the morning' / 'at night' - the form used after a day name."""
+    """'in the morning' / 'at night' - the form used after a day name.
+    Empty for midday and midnight, which already say which part they are."""
+    if moment.minute == 0 and moment.hour in (0, 12):
+        return ""
     part = _part_of_day(moment)
     return "at night" if part == "night" else f"in the {part}"
+
+
+def _clock_and_part(moment: datetime.datetime) -> str:
+    """'seven o'clock in the evening', or just 'midday'."""
+    return f"{_spoken_clock(moment)} {_part_of_day_phrase(moment)}".strip()
 
 
 def _spoken_time(moment: datetime.datetime, today: bool = False) -> str:
@@ -157,6 +215,8 @@ def _spoken_time(moment: datetime.datetime, today: bool = False) -> str:
     afternoon' otherwise. 'this night' is not English, so night becomes
     'tonight' or plain 'at night'."""
     clock = _spoken_clock(moment)
+    if clock in ("midday", "midnight"):
+        return clock
     part = _part_of_day(moment)
     if part == "night":
         return f"{clock} tonight" if today else f"{clock} at night"
@@ -265,6 +325,214 @@ def _parse_day(text: str, today: datetime.date) -> datetime.date | None:
     return None
 
 
+# --- resolving "tomorrow at 3" into an actual moment ---------------------
+
+# Words to digits, so "half past three" and "half past 3" take one code path.
+_WORD_NUMBERS = {word: value for value, word in enumerate(_ONES)}
+_WORD_NUMBERS.update({word: value * 10 for value, word in _TENS.items()})
+
+# What a bare part of the day means when no clock time comes with it. These
+# are conventions, not facts, which is why the read-back says them out loud.
+PART_OF_DAY_HOURS = {"morning": 9, "afternoon": 14, "evening": 19,
+                     "tonight": 20, "night": 20, "noon": 12, "midday": 12,
+                     "midnight": 0}
+
+_RELATIVE = re.compile(
+    r"^in (?:(?P<count>\d+)|an?) ?(?P<unit>minute|min|hour|hr|day|week)s?$")
+_HALF_HOUR = re.compile(r"^in half an hour$")
+_UNIT_SECONDS = {"minute": 60, "min": 60, "hour": 3600, "hr": 3600,
+                 "day": 86400, "week": 604800}
+
+
+def _normalise(text: str) -> str:
+    """Lower case, no stray punctuation, single spaces, 'p.m.' as 'pm'."""
+    words = (text or "").strip().lower()
+    words = words.replace("a.m.", "am").replace("p.m.", "pm")
+    words = words.replace(",", " ").replace("'o clock", " o'clock")
+    words = re.sub(r"\s+", " ", words).strip(" ?.!")
+    return words
+
+
+def _words_to_digits(words: str) -> str:
+    """'half past three' -> 'half past 3'. Speech-to-text gives us both forms
+    depending on how the sentence ran, so they are flattened to one."""
+    names = sorted(_WORD_NUMBERS, key=len, reverse=True)
+    pattern = r"\b(" + "|".join(names) + r")\b"
+    return re.sub(pattern, lambda m: str(_WORD_NUMBERS[m.group(0)]), words)
+
+
+def _apply_meridiem(hour: int, meridiem: str, part: str) -> int:
+    """Turn a clock-face hour into a 24-hour one.
+
+    In order: an explicit am/pm wins; then a part of the day said in the same
+    breath ("7 in the evening"); then the one guess this module makes -
+    **a bare 1 to 6 means the afternoon, 7 to 11 the morning, 12 is noon**.
+    Nobody books a 3am dentist by voice. It is still a guess, which is why
+    the read-back speaks it back as "three o'clock in the afternoon" before
+    anything is written."""
+    if meridiem == "am":
+        return 0 if hour == 12 else hour
+    if meridiem == "pm":
+        return hour if hour == 12 else hour + 12
+    if part in ("afternoon", "evening", "night", "tonight"):
+        return hour if hour >= 12 else hour + 12
+    if part == "morning":
+        return 0 if hour == 12 else hour
+    if hour == 12:
+        return 12
+    return hour + 12 if 1 <= hour <= 6 else hour
+
+
+def _extract_clock(words: str):
+    """Pull a time of day out of the words.
+
+    Returns (hour, minute, meridiem, leftover words) with hour None when the
+    words carry no time at all. The leftover is handed to `_parse_day`, so
+    each pattern removes exactly what it consumed."""
+    for name, hour in (("midnight", 0), ("noon", 12), ("midday", 12)):
+        if re.search(rf"\b{name}\b", words):
+            return hour, 0, "explicit", re.sub(rf"\b{name}\b", " ", words)
+
+    patterns = (
+        # "half past 3", "quarter past 3", "quarter to 4"
+        (r"\bhalf past (?P<h>\d{1,2})\b", lambda h, _: (h, 30)),
+        (r"\bquarter past (?P<h>\d{1,2})\b", lambda h, _: (h, 15)),
+        (r"\bquarter to (?P<h>\d{1,2})\b", lambda h, _: ((h - 1) or 12, 45)),
+        # "3:30pm", "15.30". No \b after the minutes: "30pm" has no word
+        # boundary in it, and requiring one dropped 3:30pm through to the
+        # bare-hour rule below, which read it as three in the afternoon.
+        (r"\b(?P<h>\d{1,2})[:.](?P<m>\d{2})(?!\d)", lambda h, m: (h, m)),
+        # "3pm", "3 pm"
+        (r"\b(?P<h>\d{1,2}) ?(?=am|pm)", lambda h, _: (h, 0)),
+        # "3 o'clock"
+        (r"\b(?P<h>\d{1,2}) ?o'?clock\b", lambda h, _: (h, 0)),
+        # "at 3" - last, so it never steals the hour from a fuller form
+        (r"\bat (?P<h>\d{1,2})\b", lambda h, _: (h, 0)),
+    )
+    for pattern, unpack in patterns:
+        match = re.search(pattern, words)
+        if not match:
+            continue
+        hour = int(match.group("h"))
+        minute = int(match.groupdict().get("m") or 0)
+        hour, minute = unpack(hour, minute)
+        if not (0 <= hour <= 23 and 0 <= minute <= 59):
+            continue
+        rest = words[:match.start()] + " " + words[match.end():]
+        # The am/pm sits just past what we matched, so read it from there.
+        meridiem = ""
+        trailing = re.match(r"\s*(am|pm)\b", words[match.end():])
+        if trailing:
+            meridiem = trailing.group(1)
+            rest = words[:match.start()] + " " + words[match.end() + trailing.end():]
+        return hour, minute, meridiem, rest
+    return None, 0, "", words
+
+
+def _find_part_of_day(words: str):
+    """The part of the day named in the words, and what's left without it."""
+    for name in ("morning", "afternoon", "evening", "tonight", "night",
+                 "noon", "midday", "midnight"):
+        if re.search(rf"\b{name}\b", words):
+            return name, re.sub(rf"\b(this |in the |at )?{name}\b", " ", words)
+    return "", words
+
+
+def resolve_when(text: str, base: datetime.datetime | None = None,
+                 roll_past: bool = True):
+    """'tomorrow at 3' -> a real local datetime.
+
+    Returns (moment, "") or (None, one short question to ask instead). It
+    never returns a moment it had to invent a day AND a time for: a day with
+    no time asks what time, because booking a silent 9am is how a calendar
+    ends up wrong."""
+    base = base or now()
+    words = _normalise(text)
+    if not words:
+        return None, "When should that be?"
+
+    words = _words_to_digits(words)
+
+    if _HALF_HOUR.match(words):
+        return base + datetime.timedelta(minutes=30), ""
+    relative = _RELATIVE.match(words)
+    if relative:
+        count = int(relative.group("count") or 1)
+        return (base + datetime.timedelta(
+            seconds=count * _UNIT_SECONDS[relative.group("unit")]), "")
+
+    # A full machine timestamp, in case one is ever handed straight through.
+    try:
+        exact = datetime.datetime.fromisoformat(words.upper().replace(" ", "T"))
+        return (exact if exact.tzinfo else exact.replace(tzinfo=local_zone())), ""
+    except ValueError:
+        pass
+
+    hour, minute, meridiem, rest = _extract_clock(words)
+    part, rest = _find_part_of_day(rest)
+    rest = re.sub(r"\b(on|at|the|this|coming)\b", " ", rest)
+    rest = re.sub(r"\s+", " ", rest).strip()
+
+    day = _parse_day(rest, base.date()) if rest else None
+    day_was_said = day is not None
+
+    if hour is None:
+        if part:
+            hour, minute, meridiem = PART_OF_DAY_HOURS[part], 0, "explicit"
+        elif day_was_said:
+            return None, (f"What time {_day_label(day, now().date())}?")
+        else:
+            return None, f"I couldn't work out a time from {text!r}."
+
+    if meridiem != "explicit":
+        hour = _apply_meridiem(hour, meridiem, part)
+
+    moment = datetime.datetime.combine(
+        day or base.date(), datetime.time(hour % 24, minute),
+        tzinfo=local_zone())
+
+    # "at 3" said at four in the afternoon means tomorrow, not two hours ago.
+    # Only ever rolled when the DAY was left unsaid - an explicit past date is
+    # a mistake to report, not to quietly correct.
+    if roll_past and not day_was_said and moment <= base:
+        moment += datetime.timedelta(days=1)
+    return moment, ""
+
+
+def _resolve_end(text: str, start: datetime.datetime):
+    """The end of an event. Accepts a clock time ('5pm'), a duration ('for
+    two hours', 'in 90 minutes'), or nothing at all."""
+    words = _words_to_digits(_normalise(text))
+    duration = re.match(
+        r"^(?:for |lasting )?(?P<count>\d+) ?(?P<unit>minute|min|hour|hr)s?$",
+        words)
+    if duration:
+        return start + datetime.timedelta(
+            seconds=int(duration.group("count"))
+            * _UNIT_SECONDS[duration.group("unit")]), ""
+    # Relative to the START, not to now, and never rolled forward a day.
+    return resolve_when(text, base=start, roll_past=False)
+
+
+def _spoken_moment(moment: datetime.datetime) -> str:
+    """'tomorrow at three o'clock in the afternoon' - a moment named in full,
+    for reading back before anything is written."""
+    day = _day_label(moment.date(), now().date())
+    if day == "today":
+        return _spoken_time(moment, today=True)
+    return f"{day} at {_clock_and_part(moment)}"
+
+
+def _spoken_duration(minutes: int) -> str:
+    if minutes % 60 == 0 and minutes >= 60:
+        hours = minutes // 60
+        return "an hour" if hours == 1 else f"{_number_word(hours)} hours"
+    if minutes < 60:
+        return f"{_number_word(minutes)} minutes"
+    return f"{_number_word(minutes // 60)} and a half hours" \
+        if minutes % 60 == 30 else f"{minutes} minutes"
+
+
 def _window(when: str):
     """Turn 'today' / 'tomorrow' / 'this week' / a date into the span to ask
     Google for. Returns (start, end, label, group_by_day) - or
@@ -317,22 +585,22 @@ def _service():
     return service, ""
 
 
-def _failure_sentence(exc: Exception) -> str:
+def _failure_sentence(exc: Exception, doing: str = "read your calendar") -> str:
     """One spoken sentence for a call that didn't come back. Never a stack
-    trace, and never a claim that it worked."""
+    trace, and never a claim that it worked - a write that failed says so."""
     detail = google_auth._short(exc)
     lowered = detail.lower()
     if "insufficient" in lowered or "scope" in lowered or "403" in lowered:
-        return ("Google wouldn't let me read your calendar - that permission "
-                "hasn't been granted yet. Sign in once more and try again.")
+        return (f"Google wouldn't let me {doing} - that permission hasn't "
+                "been granted yet. Sign in once more and try again.")
     if any(word in lowered for word in
            ("network", "resolve", "unreachable", "timed out", "connection")):
-        return ("I couldn't reach your calendar just now - it looks like the "
-                "network is down.")
+        return (f"I couldn't reach your calendar just now, so I didn't {doing} "
+                "- it looks like the network is down.")
     if "has not been used" in lowered or "disabled" in lowered:
         return ("The Google Calendar API isn't switched on for this project "
-                "yet, so I can't read your calendar.")
-    return f"I couldn't read your calendar: {detail}"
+                f"yet, so I couldn't {doing}.")
+    return f"I couldn't {doing}: {detail}"
 
 
 def _load(start, end, query: str | None = None, limit: int = 50):
@@ -439,7 +707,7 @@ def _describe(events: list, label: str, group_by_day: bool, empty: str) -> str:
 def get_current_time() -> str:
     """The local time and date, said the way a person says it."""
     moment = now()
-    return (f"It's {_spoken_clock(moment)} {_part_of_day_phrase(moment)} on "
+    return (f"It's {_clock_and_part(moment)} on "
             f"{moment.strftime('%A')}, {_spoken_date(moment.date())}.")
 
 
@@ -484,8 +752,7 @@ def next_event() -> str:
         return f"Next up is {_title(event)}, all day {day}."
     if moment.date() == today:
         return f"Next up is {_title(event)} at {_spoken_time(moment, today=True)}."
-    return (f"Next up is {_title(event)} {day}, at "
-            f"{_spoken_clock(moment)} {_part_of_day_phrase(moment)}.")
+    return f"Next up is {_title(event)} {day}, at {_clock_and_part(moment)}."
 
 
 def find_event(query: str) -> str:
@@ -524,8 +791,7 @@ def find_event(query: str) -> str:
         elif all_day:
             phrases.append(f"{_title(event)}, all day {day}")
         else:
-            phrases.append(f"{_title(event)} {day} at {_spoken_clock(moment)} "
-                           f"{_part_of_day_phrase(moment)}")
+            phrases.append(f"{_title(event)} {day} at {_clock_and_part(moment)}")
 
     if len(matches) == 1:
         return f"I found {phrases[0]}."
@@ -533,3 +799,257 @@ def find_event(query: str) -> str:
     if len(matches) > len(spoken):
         sentence += f" And {len(matches) - len(spoken)} more."
     return sentence
+
+
+# --- finding the one event they meant --------------------------------------
+
+def _length_of(event: dict) -> datetime.timedelta | None:
+    """How long an event runs, or None if it has no real start and end."""
+    start = event.get("start", {}).get("dateTime")
+    end = event.get("end", {}).get("dateTime")
+    if not (start and end):
+        return None
+    return (datetime.datetime.fromisoformat(end)
+            - datetime.datetime.fromisoformat(start))
+
+
+def _find_by_title(identifier: str):
+    """The single event whose title matches, or a sentence to say instead.
+
+    Returns (event, "", []) when exactly one thing matches, and
+    (None, sentence, candidates) when nothing does or several do. Several is
+    not an error - it is a question, and the sentence asks it."""
+    words = (identifier or "").strip()
+    if not words:
+        return None, "Which event did you mean?", []
+
+    start = now() - datetime.timedelta(days=FIND_LOOKBACK_DAYS)
+    end = now() + datetime.timedelta(days=FIND_HORIZON_DAYS)
+    events, problem = _load(start, end, query=words)
+    if problem:
+        return None, problem, []
+
+    needle = words.lower()
+    exact = [e for e in events if _title(e).lower() == needle]
+    partial = [e for e in events if needle in _title(e).lower()]
+    matches = exact or partial
+
+    if not matches:
+        return None, f"I couldn't find anything called {words} on your calendar.", []
+    if len(matches) == 1:
+        return matches[0], "", []
+
+    # More than one. Read them back and ask - never pick for them.
+    spoken = matches[:MAX_SPOKEN_EVENTS]
+    phrases = []
+    for event in spoken:
+        moment, all_day = _starts_at(event)
+        if moment is None:
+            phrases.append(_title(event))
+        elif all_day:
+            phrases.append(f"{_title(event)}, all day "
+                           f"{_day_label(moment.date(), now().date())}")
+        else:
+            phrases.append(f"{_title(event)} {_spoken_moment(moment)}")
+    more = "" if len(matches) == len(spoken) else \
+        f" And {len(matches) - len(spoken)} more."
+    return None, (f"There are {len(matches)} that match: {_join(phrases)}.{more} "
+                  "Which one did you mean?"), matches
+
+
+def _clashes(start, end, ignore_id: str = ""):
+    """Events already occupying that slot. All-day events don't count - a
+    holiday shouldn't block a meeting - and neither does anything the
+    calendar itself marks as free."""
+    events, problem = _load(start, end)
+    if problem:
+        return [], problem
+    busy = []
+    for event in events:
+        if event.get("id") == ignore_id:
+            continue
+        if event.get("transparency") == "transparent":
+            continue
+        moment, all_day = _starts_at(event)
+        if all_day or moment is None:
+            continue
+        busy.append(event)
+    return busy, ""
+
+
+def _ask(question: str, refusal: str):
+    """Put the yes/no question. Returns (approved, what_to_say_if_not).
+
+    With no hook wired there is no way to ask, so the answer is no. A write
+    that cannot be confirmed must not happen."""
+    if _confirm is None:
+        print("[calendar] no confirm hook wired - refusing to write")
+        return False, ("I can't confirm that with you right now, so I've left "
+                       "your calendar alone.")
+    try:
+        approved = bool(_confirm(question))
+    except Exception as exc:
+        print(f"[calendar] confirm failed: {exc!r}")
+        return False, refusal
+    return (True, "") if approved else (False, refusal)
+
+
+def _clash_question(busy: list, action: str) -> str:
+    """'You already have Standup at nine o'clock then. Shall I ...anyway?'"""
+    clashing = _join([f"{_title(e)} at {_spoken_clock(_starts_at(e)[0])}"
+                      for e in busy[:3]])
+    return f"You already have {clashing} then. Shall I {action} anyway?"
+
+
+# --- creating, moving and cancelling ---------------------------------------
+
+def create_event(title: str, start: str, end: str | None = None,
+                 description: str | None = None) -> str:
+    """Put a new event in the calendar, after reading it back for a yes."""
+    name = (title or "").strip()
+    if not name:
+        return "What should I call it?"
+
+    service, problem = _service()
+    if service is None:
+        return problem
+
+    when, problem = resolve_when(start)
+    if problem:
+        return problem
+
+    if end:
+        finish, problem = _resolve_end(end, when)
+        if problem:
+            return problem
+        if finish <= when:
+            return (f"That would end before it starts. When should "
+                    f"{name} finish?")
+    else:
+        finish = when + datetime.timedelta(minutes=DEFAULT_DURATION_MINUTES)
+
+    minutes = int((finish - when).total_seconds() // 60)
+    length = "" if minutes == DEFAULT_DURATION_MINUTES else \
+        f", for {_spoken_duration(minutes)}"
+    question = f"Create {name} {_spoken_moment(when)}{length}?"
+
+    # A clash doesn't stop the booking - it changes the question, so a double
+    # booking is something the user says yes to rather than discovers later.
+    busy, problem = _clashes(when, finish)
+    if problem:
+        return problem
+    if busy:
+        question = _clash_question(busy, f"add {name} {_spoken_moment(when)}")
+
+    approved, refusal = _ask(question, f"I haven't added {name}.")
+    if not approved:
+        return refusal
+
+    body = {
+        "summary": name,
+        # No timeZone field: the stamps carry their own offset, which the API
+        # accepts and which needs no IANA name from a machine that has none.
+        "start": {"dateTime": when.isoformat()},
+        "end": {"dateTime": finish.isoformat()},
+    }
+    if description:
+        body["description"] = description
+
+    try:
+        service.events().insert(calendarId=CALENDAR_ID, body=body).execute()
+    except Exception as exc:
+        return _failure_sentence(exc, "add that to your calendar")
+
+    print(f"[calendar] created {name!r} at {when.isoformat()}")
+    return f"Done - {name} is in your calendar {_spoken_moment(when)}."
+
+
+def reschedule_event(event_identifier: str, new_start: str,
+                     new_end: str | None = None) -> str:
+    """Move an existing event, after reading the move back for a yes."""
+    service, problem = _service()
+    if service is None:
+        return problem
+
+    event, problem, _ = _find_by_title(event_identifier)
+    if event is None:
+        return problem
+
+    when, problem = resolve_when(new_start)
+    if problem:
+        return problem
+
+    was, all_day = _starts_at(event)
+    if new_end:
+        finish, problem = _resolve_end(new_end, when)
+        if problem:
+            return problem
+        if finish <= when:
+            return "That would end before it starts. When should it finish?"
+    else:
+        # Keep however long it already ran, so moving a two-hour meeting
+        # doesn't quietly shrink it to the default hour.
+        finish = when + (_length_of(event)
+                         or datetime.timedelta(minutes=DEFAULT_DURATION_MINUTES))
+
+    name = _title(event)
+    moving_from = "all day" if all_day or was is None else _spoken_moment(was)
+    question = f"Move {name} from {moving_from} to {_spoken_moment(when)}?"
+
+    busy, problem = _clashes(when, finish, ignore_id=event.get("id", ""))
+    if problem:
+        return problem
+    if busy:
+        question = _clash_question(
+            busy, f"move {name} to {_spoken_moment(when)}")
+
+    approved, refusal = _ask(question, f"I've left {name} where it was.")
+    if not approved:
+        return refusal
+
+    try:
+        service.events().patch(
+            calendarId=CALENDAR_ID, eventId=event["id"],
+            # patch replaces each named object wholesale, so an all-day event
+            # moved to a real time loses its bare "date" cleanly.
+            body={"start": {"dateTime": when.isoformat()},
+                  "end": {"dateTime": finish.isoformat()}}).execute()
+    except Exception as exc:
+        return _failure_sentence(exc, "move that event")
+
+    print(f"[calendar] moved {name!r} to {when.isoformat()}")
+    return f"Moved - {name} is now {_spoken_moment(when)}."
+
+
+def cancel_event(event_identifier: str) -> str:
+    """Delete an event, after reading it back for a yes."""
+    service, problem = _service()
+    if service is None:
+        return problem
+
+    event, problem, _ = _find_by_title(event_identifier)
+    if event is None:
+        return problem
+
+    name = _title(event)
+    moment, all_day = _starts_at(event)
+    if moment is None:
+        when_said = ""
+    elif all_day:
+        when_said = f", all day {_day_label(moment.date(), now().date())}"
+    else:
+        when_said = f" {_spoken_moment(moment)}"
+
+    approved, refusal = _ask(f"Cancel {name}{when_said}?",
+                             f"I've left {name} in your calendar.")
+    if not approved:
+        return refusal
+
+    try:
+        service.events().delete(calendarId=CALENDAR_ID,
+                                eventId=event["id"]).execute()
+    except Exception as exc:
+        return _failure_sentence(exc, "cancel that event")
+
+    print(f"[calendar] cancelled {name!r}")
+    return f"Cancelled - {name}{when_said} is off your calendar."

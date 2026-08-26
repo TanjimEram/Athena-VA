@@ -52,6 +52,8 @@ DEFAULTS = {
     "orb_size": 96,           # restart to apply (window size)
     "dock_edge": "right",
     "default_view": "orb",    # orb | dashboard
+    # The owl splash on the first dashboard open of a session.
+    "splash_enabled": config.SPLASH_ENABLED,
     # --- Guided mode ---
     "guide_wait_mode": "manual",   # "manual" (say 'next') | "auto" (timer)
     "guide_auto_seconds": 4,

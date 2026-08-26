@@ -109,6 +109,11 @@ def wake_label(model: str | None = None) -> str:
 # matters - the dashboard can change the model without a restart.
 WAKE_LABEL = wake_label()
 
+# The owl splash on the first dashboard open. Off makes a demo start
+# instantly; the dashboard itself is identical either way. The settings key
+# "splash_enabled" overrides this at runtime, like wake_model does.
+SPLASH_ENABLED = True
+
 # How the assistant behaves. Kept here so tuning doesn't mean editing brain.py.
 ASSISTANT_NAME = "Athena"
 

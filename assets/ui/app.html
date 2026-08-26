@@ -99,6 +99,52 @@
   }
   .label { font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--dim); }
   #topbar { display: flex; align-items: center; justify-content: space-between; height: 44px; padding: 0 16px; border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+  /* ---- owl splash (first dashboard open only) ---- */
+  #splash {
+    display: none; position: fixed; inset: 0; z-index: 2000;
+    background: var(--bg); align-items: center; justify-content: center;
+    opacity: 0; transition: opacity 420ms ease;
+    /* Decoration only, and nothing on it is clickable. If teardown ever
+       failed, an invisible full-window overlay would swallow every click on
+       the dashboard - this makes that impossible rather than unlikely. */
+    pointer-events: none;
+  }
+  body.splash-on #splash { display: flex; }
+  body.splash-in #splash { opacity: 1; }
+  #splash-mark {
+    position: relative; width: min(46vmin, 440px); line-height: 0;
+    transition: filter 260ms ease;
+  }
+  #splash-owl { width: 100%; height: auto; display: block; }
+  /* The eyelids. Positions are percentages of the IMAGE, measured from
+     owl.png by connected-component analysis (see docs/architecture.md), so
+     they hold at any size - the splash is sized in vmin and must survive a
+     resize. owl-alpha.png is deliberately NOT cropped, or these would move.
+     Filled with the eye-socket blue rather than the page background: the eye
+     sits inside a glowing face, so a --bg patch reads as a black hole
+     punched through the mark rather than a closed eye. */
+  .lid {
+    position: absolute; background: #022974; border-radius: 26%;
+    top: 41.06%; height: 8.20%;
+    transform: scaleY(1); transform-origin: top center;
+    transition: transform 380ms cubic-bezier(.22,.61,.36,1);
+  }
+  #lid-left  { left: 41.41%; width: 5.95%; }
+  #lid-right { left: 52.65%; width: 5.86%; }
+  body.eye-left-open  #lid-left,
+  body.eye-right-open #lid-right { transform: scaleY(0); }
+  body.splash-bloom #splash-mark {
+    filter: drop-shadow(0 0 30px rgba(79,214,232,0.85)) brightness(1.16);
+  }
+  /* Reduced motion: no lids, no bloom, just the mark. The JS also skips
+     straight to the end of the timeline - this is the visual half. */
+  @media (prefers-reduced-motion: reduce) {
+    #splash { transition-duration: 120ms; }
+    .lid { display: none; }
+    #splash-mark { transition: none; }
+    body.splash-bloom #splash-mark { filter: none; }
+  }
+
   /* The mark centres on the header; ATHENA and its subtitle keep the baseline
      relationship they had, so nesting the text rather than flattening it. */
   .brand { display: flex; align-items: center; gap: 12px; }
@@ -238,6 +284,17 @@
 <body class="mode-orb state-idle dock-right">
 
   <!-- full-window, always-clickable orb surface -->
+  <!-- Owl splash. Shown once, on the first dashboard open of a session, then
+       removed from the DOM. Sits above everything; #splash-fail in the JS
+       tears it down if anything at all goes wrong. -->
+  <div id="splash" aria-hidden="true">
+    <div id="splash-mark">
+      <img id="splash-owl" src="owl-alpha.png" alt="">
+      <span class="lid" id="lid-left"></span>
+      <span class="lid" id="lid-right"></span>
+    </div>
+  </div>
+
   <div id="orb-view">
     <div id="orb">
       <div class="pulse p1"></div>
@@ -338,10 +395,88 @@
     }
   }
 
+  /* ---- owl splash -------------------------------------------------------
+     Plays ONCE, on the first dashboard open of a session. It is decoration:
+     it must never block, never repeat, and never be the reason the window is
+     blank. Every path ends in finish(), including a watchdog, so the only
+     thing a bug here can cost is the animation. */
+  var _splashState = "idle";           // idle -> playing -> done
+  var _splashEnabled = true;           // replaced by get_branding
+  var _splashTimers = [];
+
+  function _splashFinish() {
+    if (_splashState === "done") return;
+    _splashState = "done";
+    _splashTimers.forEach(clearTimeout);
+    _splashTimers = [];
+    try {
+      document.body.classList.remove("splash-in", "splash-bloom",
+                                     "eye-left-open", "eye-right-open");
+      var node = document.getElementById("splash");
+      // Let the fade finish, then take it out of the DOM entirely so it can
+      // never intercept a click on the dashboard beneath it.
+      setTimeout(function () {
+        document.body.classList.remove("splash-on");
+        if (node && node.parentNode) node.parentNode.removeChild(node);
+      }, 440);
+    } catch (err) {
+      console.error("[app] splash teardown:", err);
+      document.body.classList.remove("splash-on");
+    }
+  }
+
+  function playSplash() {
+    if (_splashState !== "idle") return;
+    try {
+      var params = new URLSearchParams(window.location.search);
+      if (params.get("skipboot") === "1" || !_splashEnabled) {
+        _splashState = "done";
+        var n = document.getElementById("splash");
+        if (n && n.parentNode) n.parentNode.removeChild(n);
+        return;
+      }
+      if (!document.getElementById("splash-owl")) { _splashFinish(); return; }
+      _splashState = "playing";
+
+      var reduced = window.matchMedia
+        && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      var at = function (ms, fn) { _splashTimers.push(setTimeout(fn, ms)); };
+
+      document.body.classList.add("splash-on");
+      // A frame later, so the browser has the element laid out and animates
+      // the opacity rather than snapping to it. The setTimeout is not
+      // belt-and-braces: requestAnimationFrame does NOT fire while the window
+      // is hidden or not compositing, and without the fallback the splash
+      // would sit at opacity 0 for the whole timeline - invisible, but still
+      // the thing on screen.
+      var fadeIn = function () { document.body.classList.add("splash-in"); };
+      requestAnimationFrame(fadeIn);
+      at(32, fadeIn);
+
+      if (reduced) {
+        // Eyes already open, no bloom, straight out. The CSS hides the lids.
+        at(900, _splashFinish);
+      } else {
+        at(520,  function () { document.body.classList.add("eye-left-open"); });
+        at(1200, function () { document.body.classList.add("eye-right-open"); });
+        at(1620, function () { document.body.classList.add("splash-bloom"); });
+        at(1900, function () { document.body.classList.remove("splash-bloom"); });
+        at(2100, _splashFinish);
+      }
+      // Watchdog: whatever happens above, the splash is gone by 4s. A stalled
+      // animation must not leave the window showing an owl and nothing else.
+      at(4000, _splashFinish);
+    } catch (err) {
+      console.error("[app] splash failed, skipping to the dashboard:", err);
+      _splashFinish();
+    }
+  }
+
   /* view toggles (called from Python) */
   window.showDashboard = function () {
     document.body.classList.remove("mode-orb");
     document.body.classList.add("mode-dashboard");
+    try { playSplash(); } catch (err) { console.error("[app] splash:", err); }
     console.log("[app] showDashboard");
   };
   window.showOrb = function () {
@@ -654,6 +789,7 @@
         document.getElementById("hud-wake").textContent =
           "WAKE: " + b.wake_label.toUpperCase();
       }
+      if (b && b.splash_enabled === false) { _splashEnabled = false; }
     }).catch(function (err) { console.error("[app] branding:", err); });
     console.log("[app] handlers wired (pywebviewready)");
   }

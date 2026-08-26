@@ -128,8 +128,13 @@ class _Api:
             model = settings.get("wake_model", config.WAKE_MODEL)
         except Exception:
             model = config.WAKE_MODEL
+        try:
+            splash = bool(settings.get("splash_enabled", config.SPLASH_ENABLED))
+        except Exception:
+            splash = config.SPLASH_ENABLED
         return {"wake_label": config.wake_label(model),
-                "assistant_name": config.ASSISTANT_NAME}
+                "assistant_name": config.ASSISTANT_NAME,
+                "splash_enabled": splash}
 
     # ---- settings dashboard (delegates to settings_api) ----
     def get_settings(self):

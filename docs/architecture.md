@@ -879,6 +879,48 @@ it reads as a blue smudge rather than an A. It needs ~60px to be legible,
 which crowds the 74px border and collides with the `#dot`/`#arc`/`#bars`
 state animations.
 
+### The owl splash — assets/ui/app.html (DONE)
+Plays **once**, on the first dashboard open of a session, then removes itself
+from the DOM. `config.SPLASH_ENABLED` (default True) is the default; the
+settings key `splash_enabled` overrides it at runtime, and `?skipboot=1` on
+the page URL skips it regardless.
+
+Timeline, ~2.5s: fade in with both eyes shut (420ms) → left eye opens at
+520ms → 300ms beat → right eye at 1200ms → glow bloom 1620–1900ms → fade out
+at 2100ms → node removed at ~2540ms.
+
+**The eyes are raster**, so each is covered by an absolutely positioned lid
+that retracts with `transform: scaleY(1)→scaleY(0)`, `transform-origin: top`.
+Positions are **percentages of the image**, so they survive any resize — the
+splash is sized in `vmin`:
+
+| | left | width | top | height |
+|---|---|---|---|---|
+| `#lid-left` | 41.41% | 5.95% | 41.06% | 8.20% |
+| `#lid-right` | 52.65% | 5.86% | 41.06% | 8.20% |
+
+Measured from `owl.png` by connected-component analysis on the blown-out
+crescents — the eyes are two symmetric components of 1392 and 1384 px at
+x 42.01–46.76% and 53.25–57.91%, y 41.66–48.66%. Luminance thresholding alone
+does **not** work: the brow is as bright as the eye. `owl-alpha.png` is
+deliberately **not** cropped, because trimming would silently move every
+percentage above.
+
+The lids are filled with the eye-socket blue `#022974`, **not** `--bg`. The
+eye sits inside a glowing face, so a background-coloured patch reads as a
+black hole punched through the mark rather than a closed eye.
+
+**It cannot block the interface.** `#splash` is `pointer-events: none`, so
+even a failed teardown cannot swallow a click; a 4s watchdog calls the same
+`_splashFinish()` every other path uses; the whole of `playSplash` is
+try/caught and falls through to the dashboard. The fade-in is triggered by
+`requestAnimationFrame` **and** a 32ms timer, because rAF does not fire while
+the window is hidden or not compositing — without the fallback the splash
+would sit invisibly at opacity 0 for the full timeline.
+
+`prefers-reduced-motion: reduce` hides the lids entirely (eyes open from the
+first frame), drops the bloom, and finishes at ~1.3s.
+
 ### athena/ui.py — the two-mode UI (DONE: single-page app.html)
 ONE pywebview window loading ONE page, `assets/ui/app.html`, which holds
 both `#orb-view` (96x96 colour-keyed chathead) and `#dashboard-view` (1150x700

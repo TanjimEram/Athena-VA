@@ -8,7 +8,7 @@ Anything not built yet is clearly marked **PLANNED**.
 ## 1. What Athena is
 
 Athena is a voice assistant that lives on a Windows laptop, like a homemade
-Siri or Alexa. You say "hey Jarvis", she answers "Yes?" in an Irish voice,
+Siri or Alexa. You say "Hey Athena", she answers "Yes?" in an Irish voice,
 and you tell her what you want in normal words — "open Chrome", "how's the
 battery", "lock the screen". A cloud AI model figures out what you meant and
 either answers you or actually does the thing on your PC. Risky actions
@@ -20,7 +20,7 @@ loud. She never pretends: if something fails, she tells you it failed and why.
 ```
             (always listening, local, free)
   ┌──────────────┐
-  │  WAKE WORD   │  "hey Jarvis"  — openWakeWord, runs on this laptop
+  │  WAKE WORD   │  "Hey Athena"  — openWakeWord, runs on this laptop
   └──────┬───────┘
          │ mic released, Athena says "Yes?"
          ▼
@@ -60,7 +60,7 @@ locally.
 
 | Component | Tool chosen | Why (for this laptop) | Offline fallback |
 |---|---|---|---|
-| Wake word | openWakeWord, pretrained `hey_jarvis` (ONNX) | Tiny model, runs fine on CPU; no account, no API key, never expires | Already offline |
+| Wake word | openWakeWord, custom-trained `hey_athena` (ONNX) | Tiny model, runs fine on CPU; no account, no API key, never expires | Already offline |
 | Speech-to-text | Groq `whisper-large-v3-turbo` | Big-model accuracy with zero local compute; same free API key as the brain | faster-whisper small model on CPU, or Vosk |
 | Brain + tool calling | Groq `llama-3.3-70b-versatile` | A 70B model can't fit in 16 GB shared RAM and AMD has no CUDA for local inference; Groq's free tier serves it fast and supports OpenAI-style tool calling | Ollama/llama.cpp with a small (3–8B) model — noticeably dumber |
 | Voice (TTS) | edge-tts, voice `en-IE-EmilyNeural` | Free, natural-sounding Irish female voice — the FRIDAY sound; no key needed | pyttsx3 (Windows SAPI voices — robotic but offline) |
@@ -97,7 +97,7 @@ athena-va/
 │   ├── brain.py             LLM + tool calling, the decision-maker     [Tahsin]
 │   ├── skills.py            real Windows actions (apps/volume/lock...) [Tahsin]
 │   ├── safety.py            free/confirm/blocked gate for every tool   [Member 3]
-│   ├── wake.py              openWakeWord "hey Jarvis" listener         [shared]
+│   ├── wake.py              openWakeWord "Hey Athena" listener         [shared]
 │   ├── audio_io.py          microphone recording to 16 kHz WAV         [shared]
 │   ├── stt.py               WAV → text via Groq Whisper                [shared]
 │   ├── tts.py               text → Emily's voice via edge-tts + pygame [shared]
@@ -175,7 +175,7 @@ far). Key idea: the *model* never decides what's safe — a dumb, auditable
 Python lookup does, and unknown tool names are treated as blocked.
 
 **wake.py — the always-on ear.** Streams the mic in 80 ms frames through
-openWakeWord's `hey_jarvis` detector — a small neural net running locally on
+openWakeWord's `hey_athena` detector — a small neural net running locally on
 CPU. When the confidence score passes `WAKE_THRESHOLD` (0.5, tunable in
 config) it returns True and *releases the microphone* so the recorder can
 open it next. Swapping in a custom "Athena" model later = pointing
@@ -207,7 +207,7 @@ blocks and your app loop runs in a background thread it spawns. **Built and
 demoed, not yet wired into main.py.**
 
 **main.py — the conductor.** The always-on loop gluing it all together:
-wait for "hey Jarvis" → speak "Yes?" → record 5 s → transcribe → think →
+wait for "Hey Athena" → speak "Yes?" → record 5 s → transcribe → think →
 speak the honest reply — and for confirm-level actions, listen for a spoken
 "yes" before running them. Keeps conversation history across turns so
 follow-up questions work. Ctrl+C exits cleanly.
@@ -220,15 +220,15 @@ follow-up questions work. Ctrl+C exits cleanly.
   → real skill runs → Emily speaks the honest result.
 - Real skills: apps actually launch, volume actually changes, battery is
   actually read; failures are reported truthfully.
-- Wake word: "hey Jarvis" detection, local and free, mic handed over cleanly.
+- Wake word: "Hey Athena" detection, local and free, mic handed over cleanly.
 - Always-on assistant (`python -m athena.main`): the full loop end to end.
 - The orb UI, standalone (run_ui_test.py).
 
 **Next (PLANNED):**
 - Wire the orb into main.py (state changes at each pipeline stage).
 - `memory.py` with Supabase — persistent memory across sessions (Member 2).
-- A custom "Athena" wake-word model to replace hey_jarvis (train a .onnx,
-  change one config line).
+- ~~A custom "Athena" wake-word model to replace hey_jarvis~~ **DONE** —
+  `models/hey_athena.onnx` is trained and in use (`config.WAKE_MODEL`).
 - Record-until-silence instead of a fixed 5-second window.
 - Package as a single .exe with PyInstaller.
 
@@ -243,7 +243,7 @@ From the repo root, venv activated (or prefix with `.venv\Scripts\python.exe`):
 | `python stt_test.py` | Records 5 s, prints what you said |
 | `python talk_test.py` | Spoken conversation — Enter to talk, `q` to quit |
 | `python run_ui_test.py` | The orb cycling its four states |
-| `python -m athena.main` | The real thing: say "hey Jarvis" |
+| `python -m athena.main` | The real thing: say "Hey Athena" |
 
 ## 10. Troubleshooting (problems we actually hit)
 
@@ -279,7 +279,8 @@ From the repo root, venv activated (or prefix with `.venv\Scripts\python.exe`):
   with a company email and its free keys expire; openWakeWord needs no
   account, no key, nothing expires, and it ships a usable pretrained
   "hey_jarvis" model — with a documented path to training our own "Athena"
-  word later.
+  word later. That path was taken: `hey_athena` is the model in use, and
+  hey_jarvis remains selectable in the settings dashboard.
 - **Why edge-tts and Emily.** Free and unlimited, dramatically more natural
   than Windows' built-in voices, and `en-IE-EmilyNeural` — Irish, female —
   is the closest match to FRIDAY, the vibe we want. Trade-off: needs
@@ -288,7 +289,7 @@ From the repo root, venv activated (or prefix with `.venv\Scripts\python.exe`):
 ## 12. Glossary
 
 - **Wake word** — the phrase that makes the assistant start listening
-  ("hey Jarvis"), detected locally so nothing is recorded until you say it.
+  ("Hey Athena"), detected locally so nothing is recorded until you say it.
 - **STT / speech-to-text** — turning a voice recording into written words.
 - **TTS / text-to-speech** — turning written words into a spoken voice.
 - **LLM** — large language model; the AI that understands and generates text.

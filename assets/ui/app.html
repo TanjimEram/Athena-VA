@@ -241,7 +241,7 @@
       <div class="brand"><span class="word">ATHENA</span><span class="sub">// WINDOWS VOICE ASSISTANT</span></div>
       <div class="meta">
         <span id="hud-state">AWAITING</span><span class="sep">|</span>
-        <span>WAKE: HEY_JARVIS</span><span class="sep">|</span>
+        <span id="hud-wake">WAKE: &mdash;</span><span class="sep">|</span>
         <span id="clock">--:--:--</span>
         <button id="gearbtn" title="settings">&#9881;</button>
         <button id="minbtn" title="collapse to orb">&ndash;</button>
@@ -632,6 +632,14 @@
     document.getElementById("reset-btn").addEventListener("click", function () {
       apiAsync("reset_defaults").then(function () { window.openSettings(); showSaved(); });
     });
+    // The wake phrase is config's to decide, not this page's - it follows
+    // WAKE_MODEL. Failing to fetch it leaves the em-dash, never a wrong phrase.
+    apiAsync("get_branding").then(function (b) {
+      if (b && b.wake_label) {
+        document.getElementById("hud-wake").textContent =
+          "WAKE: " + b.wake_label.toUpperCase();
+      }
+    }).catch(function (err) { console.error("[app] branding:", err); });
     console.log("[app] handlers wired (pywebviewready)");
   }
 

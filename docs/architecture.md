@@ -70,7 +70,9 @@ record(seconds: float = 5, samplerate: int = 16000) -> str | None
 
 ### athena/wake.py — wake-word detection (DONE)
 openWakeWord (local, no API key, no account) with the pretrained
-"hey_jarvis" model. Model name/path and threshold live in config
+"hey_athena" model (custom-trained; `config.WAKE_MODEL`). The spoken
+phrase for display comes from `config.wake_label()` - never typed into a
+template. Model name/path and threshold live in config
 (`WAKE_MODEL`, `WAKE_THRESHOLD`); swapping in a custom "Athena" .onnx later
 is a one-line config change. Owns the mic only while listening and releases
 it before returning, so audio_io.record can open it immediately after.

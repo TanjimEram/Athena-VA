@@ -113,6 +113,20 @@ class _Api:
         else:
             print(f"[ui] confirm answered (no handler): {answer}")
 
+    def get_branding(self):
+        """Text the page displays but must not own: the wake phrase, and the
+        assistant's name. Called once from wire(), after pywebviewready.
+
+        Deliberately separate from get_settings, which reads .env and probes
+        connections - this runs on every page load and has to stay cheap."""
+        from athena import config, settings
+        try:
+            model = settings.get("wake_model", config.WAKE_MODEL)
+        except Exception:
+            model = config.WAKE_MODEL
+        return {"wake_label": config.wake_label(model),
+                "assistant_name": config.ASSISTANT_NAME}
+
     # ---- settings dashboard (delegates to settings_api) ----
     def get_settings(self):
         from athena import settings_api

@@ -1,6 +1,6 @@
 # Athena
 
-A voice assistant for Windows 11, built in Python. Say **"hey Jarvis"**, ask
+A voice assistant for Windows 11, built in Python. Say **"Hey Athena"**, ask
 in plain words, and Athena answers in an Irish voice — or actually does it:
 opens apps, searches the web, sets the volume, locks the screen. The brain is
 a cloud LLM (Groq, free tier) using tool calling; risky actions need a spoken
@@ -29,7 +29,7 @@ python -m venv .venv
 pip install -r requirements.txt
 copy .env.example .env    # then paste your free Groq key into .env
 python run_brain_test.py  # typed test, no mic needed
-python -m athena.main     # the real thing: say "hey Jarvis"
+python -m athena.main     # the real thing: say "Hey Athena"
 ```
 
 Full details — how every module works, setup from zero, troubleshooting, and

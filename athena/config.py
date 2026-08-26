@@ -88,6 +88,27 @@ WAKE_MODEL = "hey_athena"
 # 0..1 confidence needed to trigger. Lower = more sensitive, more false wakes.
 WAKE_THRESHOLD = 0.5
 
+
+def wake_label(model: str | None = None) -> str:
+    """The wake phrase as a person reads it: "hey_athena" -> "Hey Athena".
+
+    Derived, never typed. The GUI said "hey jarvis" for weeks after the custom
+    model replaced it, because the phrase was hardcoded in three files and the
+    model name was somewhere else entirely. Anything that displays the wake
+    word asks for it here, so it can only ever be wrong in one place.
+
+    Takes a pretrained name, a bare model name, or a full path to a .onnx."""
+    name = str(model or WAKE_MODEL).strip()
+    name = os.path.splitext(os.path.basename(name))[0]     # a path -> the name
+    words = name.replace("-", " ").replace("_", " ").split()
+    return " ".join(word.capitalize() for word in words) or "the wake word"
+
+
+# The phrase for the current model, for anything that just wants the default.
+# Read wake_label(settings.get("wake_model")) instead where the live setting
+# matters - the dashboard can change the model without a restart.
+WAKE_LABEL = wake_label()
+
 # How the assistant behaves. Kept here so tuning doesn't mean editing brain.py.
 ASSISTANT_NAME = "Athena"
 

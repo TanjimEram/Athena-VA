@@ -340,7 +340,11 @@ def status_loop() -> None:
 
 def assistant_loop() -> None:
     ui.set_state("idle")  # waits for the window to finish loading
-    ui.add_log("athena online - say 'hey jarvis'", "free")
+    # The phrase follows the model in use - see config.wake_label. Reading the
+    # live setting rather than config.WAKE_MODEL, so a model changed in the
+    # dashboard is announced correctly on the next start.
+    _wake_phrase = config.wake_label(settings.get("wake_model", config.WAKE_MODEL))
+    ui.add_log(f"athena online - say '{_wake_phrase.lower()}'", "free")
 
     # Follow-ups, once, here. This is the ONLY automatic trigger in the whole
     # feature - there is no timer anywhere, because a question that arrives

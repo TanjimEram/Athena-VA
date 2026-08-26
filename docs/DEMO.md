@@ -9,29 +9,29 @@ hiccups.
 .\.venv\Scripts\python.exe -m athena.main
 ```
 
-The orb appears at the right screen edge. Say **"hey Jarvis"**, wait for the
+The orb appears at the right screen edge. Say **"Hey Athena"**, wait for the
 chirp, then speak. Click the orb to open the dashboard; press Esc (or the
 minimise button) to collapse back. Close the window or say "go to sleep" to
 quit.
 
 ## A demo script that flows well
 
-1. **Simple chat** — *"hey Jarvis … what can you do?"*
+1. **Simple chat** — *"Hey Athena … what can you do?"*
    Fast spoken reply, proves the voice loop.
-2. **Single action** — *"hey Jarvis … what's my battery level?"*
+2. **Single action** — *"Hey Athena … what's my battery level?"*
    Real system info, spoken.
 3. **Open the dashboard** — click the orb. Show the tool log, transcript,
    status strip (groq/supabase/mic dots, CPU, battery, latency).
-4. **Multi-step chain** — *"hey Jarvis … open notepad, check my battery, and
+4. **Multi-step chain** — *"Hey Athena … open notepad, check my battery, and
    search the web for lofi focus music."*
    Watch three steps stream into the tool log, then one natural spoken
    summary. This is the headline feature.
-5. **Screen vision** — put an error on screen, then *"hey Jarvis … look at my
+5. **Screen vision** — put an error on screen, then *"Hey Athena … look at my
    screen and tell me what this error means."*
-6. **Safety confirmation** — *"hey Jarvis … set the volume to 30."*
+6. **Safety confirmation** — *"Hey Athena … set the volume to 30."*
    Athena asks "Set volume to 30? Yes or no." Say **"yes"** (or click Approve
    on the dashboard card). Say "no" to show it skipping safely.
-7. **Sleep** — *"hey Jarvis … that's all."* She signs off.
+7. **Sleep** — *"Hey Athena … that's all."* She signs off.
 
 Keep a few seconds between requests (see rate limits below).
 

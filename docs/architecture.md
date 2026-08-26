@@ -719,6 +719,64 @@ checks alone, which need nothing). The live half writes one row, overwrites
 it, prunes and deletes itself; it distinguishes an unreachable project from a
 missing table rather than blaming the table for both.
 
+### athena/followup.py — asking whether you did it (DONE)
+An event whose time has passed says nothing about whether it happened. This
+closes the loop: find past events nobody has answered for, ask about them one
+at a time, write the answer to `event_status.py` so the question is asked
+once and never again.
+
+**The restraint is the feature**, and each piece of it is a check in the test
+script:
+
+- ONE event per question, oldest first. Never a batch, never a list.
+- `MAX_PER_SESSION` = 3. A week away earns three questions, not an
+  interrogation. Re-asking in the same session doesn't reopen the cap.
+- Startup and on request only. **There is no timer in this module** and there
+  must not be one — a question that arrives mid-conversation is an
+  interruption however well worded. A test greps the source for
+  `threading.Timer`, `sched.`, `time.sleep` and `schedule.`.
+- Silence or a changed subject records `deferred` and stops **the whole run**,
+  not just that event — continuing to the next question after someone has
+  moved on is chasing.
+- "No" records `skipped` and moves on **without comment**. No consolation, no
+  encouragement; a check asserts nothing at all is said.
+- "Yes" gets one short warm sentence from `ACKNOWLEDGEMENTS`, never repeated
+  within a session. A fixed phrase heard three times stops being an answer
+  and becomes a tic.
+
+`_yes_or_no` returns `True`/`False`/**`None`**, and `None` is the load-bearing
+one: "anything that isn't a clear yes or no" is how a changed subject is
+detected, so it must not stretch to fit. No is tested before yes, because
+"I didn't" contains "did".
+
+Speech is injected via `set_io`, the same hook `guide.py` uses, so the whole
+exchange runs in tests with no microphone. Rescheduling goes through
+`calendar_skill.reschedule_event(..., event=...)` — **by event, not by title**,
+since "Standup" also matches tomorrow's — and that write keeps its own
+read-back and its own yes rather than riding along on the follow-up. A move
+that fails records nothing.
+
+```python
+set_io(speak_fn=None, listen_fn=None) -> None
+reset_session() -> None                   # main.py calls this per session
+pending_followups() -> list               # past, unanswered, oldest first
+run(limit=3) -> str                       # the exchange; one spoken sentence
+on_startup() -> str                       # gated by followup_on_startup
+```
+
+`pending_followups` skips all-day events (holidays and birthdays, not tasks),
+declined invitations, and anything still in progress. `[]` whenever anything
+is unavailable, which is what makes "she simply does not follow up" the
+failure mode. An unreachable store leaves every event looking unanswered —
+the right way round, since the alternative silently swallows follow-ups.
+
+Setting: `followup_on_startup` (default True) in `settings.py`, read at call
+time so a demo can switch it off without a restart.
+
+Verify with `python followup_test.py` — 52 checks that script the entire
+conversation offline; `--live` creates one real past event, confirms it is
+found, and deletes it.
+
 ### athena/tts.py — text to speech (DONE, streaming pipeline)
 edge-tts (online, voice in `config.TTS_VOICE`) + pygame at 24 kHz with a
 small buffer. speak_stream is a 3-stage chain (sentence splitter -> synth

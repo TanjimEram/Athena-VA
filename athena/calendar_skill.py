@@ -519,7 +519,10 @@ def _spoken_moment(moment: datetime.datetime) -> str:
     for reading back before anything is written."""
     day = _day_label(moment.date(), now().date())
     if day == "today":
-        return _spoken_time(moment, today=True)
+        # "at" is not optional here. Without it every read-back for today
+        # reads as "Dentist half past two this afternoon" - the day names
+        # carry their own preposition ("on Friday at..."), today does not.
+        return f"at {_spoken_time(moment, today=True)}"
     return f"{day} at {_clock_and_part(moment)}"
 
 
@@ -965,15 +968,23 @@ def create_event(title: str, start: str, end: str | None = None,
 
 
 def reschedule_event(event_identifier: str, new_start: str,
-                     new_end: str | None = None) -> str:
-    """Move an existing event, after reading the move back for a yes."""
+                     new_end: str | None = None, event: dict | None = None) -> str:
+    """Move an existing event, after reading the move back for a yes.
+
+    `event` skips the title lookup when the caller already holds the exact
+    event. followup.py needs that: it is asking about ONE past occurrence,
+    and a title like "Standup" also matches tomorrow's, so looking it up by
+    name would either move the wrong one or stall on "which did you mean?".
+    Everything after the lookup - the read-back, the gate, the write - is
+    the same single code path either way."""
     service, problem = _service()
     if service is None:
         return problem
 
-    event, problem, _ = _find_by_title(event_identifier)
     if event is None:
-        return problem
+        event, problem, _ = _find_by_title(event_identifier)
+        if event is None:
+            return problem
 
     when, problem = resolve_when(new_start)
     if problem:

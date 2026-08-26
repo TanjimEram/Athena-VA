@@ -153,7 +153,7 @@ def resolution_checks() -> None:
     resolves_to("at 9", "Thu 2026-08-27 09:00")          # 7-11 is the morning
     check("a bare hour is read back so a wrong guess is heard first",
           cal._spoken_moment(cal.resolve_when("at 3", base=BASE)[0]),
-          "three o'clock this afternoon")
+          "at three o'clock this afternoon")
 
     print("\n--- a time that already passed today means tomorrow ---")
     resolves_to("at 9am", "Thu 2026-08-27 09:00")        # 9am was four hours ago

@@ -41,6 +41,9 @@ DEFAULTS = {
     # --- Behavior ---
     "confirm_before_acting": True,
     "followup_seconds": 6,
+    # Ask about events whose time has passed when Athena starts. Off makes a
+    # demo start clean; the "what did I miss" request still works either way.
+    "followup_on_startup": True,
     "sleep_phrases": ["go to sleep", "goodbye athena", "that's all", "stand down"],
     # --- Skills ---  name -> bool; missing name defaults to enabled
     "skills_enabled": {},

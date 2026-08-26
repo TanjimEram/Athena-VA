@@ -61,6 +61,17 @@ def _get_client():
         return None
 
 
+def shared_client():
+    """The one Supabase client, for any other module that needs it.
+
+    There is exactly one client in the whole project and this is how you get
+    it - see docs/design-patterns.md. `event_status.py` calls this rather
+    than building a second one: a second client means a second TLS handshake
+    on a high-latency connection, and a second copy of the "is this even
+    configured?" question. None when Supabase isn't set up or reachable."""
+    return _get_client()
+
+
 def _enabled() -> bool:
     """Memory can be turned off in settings (read live)."""
     try:

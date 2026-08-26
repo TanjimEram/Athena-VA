@@ -169,6 +169,17 @@ round trip to reach a service the user may not have configured.
 prints **one** warning rather than one per interaction — a detail that only
 shows up once something is broken, which is when noise is least welcome.
 
+That one gained a **second consumer** when the calendar arrived.
+`athena/event_status.py` stores what happened to a past event in a different
+table in the same project, and reaches the client through
+`memory.shared_client()` rather than calling `create_client` again. This is
+where the pattern pays: a second client would mean a second TLS handshake per
+session, a second `_client_failed` flag, and two modules each answering "is
+Supabase configured?" separately — and disagreeing the moment one of them is
+asked before the other. `shared_client` is a public name added for exactly
+this, so the sharing is a documented contract rather than a reach into
+another module's private.
+
 ### Without it
 
 Every call site builds its own client. On the voice loop that is a TLS

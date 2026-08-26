@@ -668,7 +668,56 @@ search(query, n=3) -> list[dict]        # case-insensitive match on user_text
 ```
 
 Verify the connection with `python memory_test.py` (writes one row, reads it
-back). One shared client is created lazily and reused (never per call).
+back). One shared client is created lazily and reused (never per call);
+`shared_client()` hands it to `event_status.py`, which must not build a
+second.
+
+### athena/event_status.py — what happened to an event (DONE)
+Supabase `event_status` table; the schema SQL is in the module docstring, as
+memory.py's is. **Google Calendar has no "done" flag** — an event whose time
+has passed looks identical to one that never happened — so if Athena is to
+ask "did you actually go?", she has to remember having asked. One row per
+event id (unique), so a question is asked once and never again.
+
+Four statuses, and no others: `done` and `skipped` are the user answering,
+`rescheduled` is written when an event is moved out of the past, `deferred`
+is what a changed subject records so she drops it and stops chasing. Anything
+else is refused before it reaches the table.
+
+`record` is an **upsert** — an event answered "deferred" this morning and
+"done" this evening ends as one row saying done, not two rows disagreeing.
+Writes go through the same fire-and-forget thread as
+`memory.log_interaction_async`, so a slow network never delays speech.
+`prune()` drops rows over `PRUNE_AFTER_DAYS` (30); it runs once per session
+on a background thread the first time the store is used — never on a timer.
+
+**One client, not two.** It comes from `memory.shared_client()`; see the
+Singleton entry in docs/design-patterns.md. Degrades exactly as memory.py
+does: unconfigured or unreachable means one warning and empty results
+forever after, and Athena simply doesn't follow up. Not gated by the
+`memory_enabled` setting — switching off conversation logging shouldn't make
+her start re-asking about events she already asked about.
+
+```python
+record(event_id, status) -> bool          # upsert; unknown status refused
+record_async(event_id, status) -> None    # fire-and-forget thread
+recorded_ids(event_ids) -> set            # which of these are answered for
+status_of(event_id) -> str                # "" if never recorded
+recent(n=10) -> list[dict]
+prune(days=30) -> int
+forget(event_id) -> bool                  # test cleanup only
+```
+
+`recorded_ids` is the query phase 4 actually needs ("what have I *not* asked
+about"), so it filters on the ids in hand rather than reading the table. When
+the store is unavailable it returns an empty set, meaning every event looks
+unanswered — the right way round, since the alternative silently swallows
+follow-ups.
+
+Verify with `python event_status_test.py` (`--offline` for the degradation
+checks alone, which need nothing). The live half writes one row, overwrites
+it, prunes and deletes itself; it distinguishes an unreachable project from a
+missing table rather than blaming the table for both.
 
 ### athena/tts.py — text to speech (DONE, streaming pipeline)
 edge-tts (online, voice in `config.TTS_VOICE`) + pygame at 24 kHz with a

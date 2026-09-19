@@ -10,6 +10,12 @@ confirmation; failures are reported honestly, never faked.
 → brain (llama-3.3-70b + tool calling) → safety gate → real Windows skills →
 voice (edge-tts, en-IE-EmilyNeural).
 
+## Watch it work
+
+[![Athena — 23-second intro. Click to play.](docs/media/intro.jpg)](docs/media/intro.mp4)
+
+*23 seconds: the pipeline, then a real session — Athena reading a live Google Sheet and stopping for a yes before sorting it.*
+
 ## Status
 
 Working end to end today: the always-on spoken loop (`python -m athena.main`),

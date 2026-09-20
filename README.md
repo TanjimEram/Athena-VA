@@ -12,7 +12,9 @@ voice (edge-tts, en-IE-EmilyNeural).
 
 ## Watch it work
 
-[![Athena — 23-second intro. Click to play.](docs/media/intro.jpg)](docs/media/intro.mp4)
+## Watch the intro
+
+[![Athena-VA intro video](docs/media/intro.jpg)](https://raw.githubusercontent.com/TanjimEram/Athena-VA/main/docs/media/intro.mp4)
 
 *23 seconds: the pipeline, then a real session — Athena reading a live Google Sheet and stopping for a yes before sorting it.*
 
